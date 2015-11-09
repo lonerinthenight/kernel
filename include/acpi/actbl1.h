@@ -673,7 +673,9 @@ enum acpi_madt_type {
 	ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR = 12,
 	ACPI_MADT_TYPE_GENERIC_MSI_FRAME = 13,
 	ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR = 14,
-	ACPI_MADT_TYPE_RESERVED = 15	/* 15 and greater are reserved */
+	ACPI_MADT_TYPE_GENERIC_ITS = 15,
+	ACPI_MADT_TYPE_GENERIC_MBI = 16,
+	ACPI_MADT_TYPE_RESERVED = 17	/* 17 and greater are reserved */
 };
 
 /*
@@ -851,6 +853,26 @@ struct acpi_madt_generic_msi_frame {
 struct acpi_madt_generic_redistributor {
 	struct acpi_subtable_header header;
 	u16 reserved;		/* reserved - must be zero */
+	u64 base_address;
+	u32 length;
+};
+
+/* 15: Generic Redistributor (ACPI 5.2) */
+
+struct acpi_madt_generic_its {
+	struct acpi_subtable_header header;
+	u16 reserved;		/* reserved - must be zero */
+	u32 its_id;
+	u64 base_address;
+	u32 reserved2;		/* reserved2 - must be zero */
+};
+
+/* 16 Generic MBI GEN (OUT OF ACPI SPEC!) */
+struct acpi_madt_generic_mbi {
+	struct acpi_subtable_header header;
+	u16 reserved;
+	u32 id;
+	u32 its_id;
 	u64 base_address;
 	u32 length;
 };

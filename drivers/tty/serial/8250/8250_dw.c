@@ -28,6 +28,7 @@
 #include <linux/clk.h>
 #include <linux/reset.h>
 #include <linux/pm_runtime.h>
+#include <linux/mbi.h>
 
 #include <asm/byteorder.h>
 
@@ -360,9 +361,16 @@ static int dw8250_probe_of(struct uart_port *p,
 static int dw8250_probe_acpi(struct uart_8250_port *up,
 			     struct dw8250_data *data)
 {
+	const struct acpi_device_id *id;
 	struct uart_port *p = &up->port;
 
 	dw8250_setup_port(up);
+	id = acpi_match_device(p->dev->driver->acpi_match_table, p->dev);
+	if (!id)
+		return -EINVAL;
+
+	if (!p->uartclk)
+		p->uartclk = (unsigned int)id->driver_data;
 
 	p->iotype = UPIO_MEM32;
 	p->serial_in = dw8250_serial_in32;
@@ -383,18 +391,32 @@ static int dw8250_probe(struct platform_device *pdev)
 {
 	struct uart_8250_port uart = {};
 	struct resource *regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	struct resource *irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	struct resource *irq;
 	struct dw8250_data *data;
+	int virq;
 	int err;
 
-	if (!regs || !irq) {
-		dev_err(&pdev->dev, "no registers/irq defined\n");
+	if (!regs) {
+		dev_err(&pdev->dev, "no registers defined\n");
 		return -EINVAL;
+	}
+
+	virq = mbi_parse_irqs(&pdev->dev, NULL);
+	if (virq > 0) {
+		uart.port.irq = virq;
+		dev_info(&pdev->dev, "use the MBI irq\n");
+	} else {
+		irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+		if (irq <=0) {
+			dev_err(&pdev->dev, "no irq defined\n");
+			return -EINVAL;
+		}
+		dev_info(&pdev->dev, "use the legacy irq\n");
+		uart.port.irq = irq->start;
 	}
 
 	spin_lock_init(&uart.port.lock);
 	uart.port.mapbase = regs->start;
-	uart.port.irq = irq->start;
 	uart.port.handle_irq = dw8250_handle_irq;
 	uart.port.pm = dw8250_do_pm;
 	uart.port.type = PORT_8250;
@@ -586,6 +608,8 @@ static const struct acpi_device_id dw8250_acpi_match[] = {
 	{ "INT3435", 0 },
 	{ "80860F0A", 0 },
 	{ "8086228A", 0 },
+	{ "HISI0030", 200000000 },
+	{ "HISI0031", 100000000 },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, dw8250_acpi_match);

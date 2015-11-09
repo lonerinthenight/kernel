@@ -1,5 +1,6 @@
 config ARM64
 	def_bool y
+	select ACPI_REDUCED_HARDWARE_ONLY if ACPI
 	select ARCH_BINFMT_ELF_RANDOMIZE_PIE
 	select ARCH_HAS_ATOMIC64_DEC_IF_POSITIVE
 	select ARCH_HAS_GCOV_PROFILE_ALL
@@ -17,11 +18,13 @@ config ARM64
 	select ARM_GIC_V2M if PCI_MSI
 	select ARM_GIC_V3
 	select ARM_GIC_V3_ITS if PCI_MSI
+	select IOMMU_SUPPORT
 	select BUILDTIME_EXTABLE_SORT
 	select CLONE_BACKWARDS
 	select COMMON_CLK
 	select CPU_PM if (SUSPEND || CPU_IDLE)
 	select DCACHE_WORD_ACCESS
+	select EDAC_SUPPORT
 	select GENERIC_ALLOCATOR
 	select GENERIC_CLOCKEVENTS
 	select GENERIC_CLOCKEVENTS_BROADCAST if SMP
@@ -53,8 +56,10 @@ config ARM64
 	select HAVE_DMA_ATTRS
 	select HAVE_DMA_CONTIGUOUS
 	select HAVE_DYNAMIC_FTRACE
+	select HAVE_DYNAMIC_FTRACE_WITH_REGS if HAVE_DYNAMIC_FTRACE
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
 	select HAVE_FTRACE_MCOUNT_RECORD
+	select HAVE_FENTRY
 	select HAVE_FUNCTION_TRACER
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_GENERIC_DMA_COHERENT
@@ -64,8 +69,11 @@ config ARM64
 	select HAVE_PERF_EVENTS
 	select HAVE_PERF_REGS
 	select HAVE_PERF_USER_STACK_DUMP
+	select HAVE_REGS_AND_STACK_ACCESS_API
 	select HAVE_RCU_TABLE_FREE
 	select HAVE_SYSCALL_TRACEPOINTS
+	select HAVE_KPROBES
+	select HAVE_KRETPROBES if HAVE_KPROBES
 	select IRQ_DOMAIN
 	select MODULES_USE_ELF_RELA
 	select NO_BOOTMEM
@@ -79,6 +87,8 @@ config ARM64
 	select SPARSE_IRQ
 	select SYSCTL_EXCEPTION_TRACE
 	select HAVE_CONTEXT_TRACKING
+	select HAVE_NMI_WATCHDOG if HISI_AARCH64_NMI || HISI_NMI_DEMO
+	select HAVE_LIVEPATCH
 	help
 	  ARM 64-bit (AArch64) Linux support.
 
@@ -146,12 +156,75 @@ source "init/Kconfig"
 
 source "kernel/Kconfig.freezer"
 
+source "kernel/livepatch/Kconfig"
+
 menu "Platform selection"
 
 config ARCH_SEATTLE
 	bool "AMD Seattle SoC Family"
 	help
 	  This enables support for AMD Seattle SOC Family
+
+config ARCH_HISI
+	bool "Hisilicon SoC Family"
+	select MBI
+	select HIP05_GMAC
+	help
+	  This enables support for Hisilicon SOC Family
+
+if ARCH_HISI
+
+menu "Hisilicon platform type"
+config ARCH_P660
+	def_bool ARCH_HISI
+	bool "Hisilicon P660 SoC"
+	select HISI_SMMU
+	select HISI_MBIGEN
+	help
+	  This enables support for Hisilicon P660 SoC
+
+config P660_2P
+	bool "P660 2P additional"
+	help
+	  This add some special handling to support P660 2P EVB.
+
+config COPYCAT_NUMA
+	bool "Temporary P660 2P NUMA support"
+	select HAVE_MEMBLOCK_NODE_MAP
+	help
+	  Say Y to compile the kernel to support NUMA (Non-Uniform Memory
+	  Access).  This option is for configuring high-end multiprocessor
+	  server systems.  If in doubt, say N.
+
+config NUMA
+	def_bool COPYCAT_NUMA
+
+config NODES_SHIFT
+	int "Max num nodes shift(1-10)"
+	range 1 10
+	default "1"
+	depends on NEED_MULTIPLE_NODES
+	help
+	  This option specifies the maximum number of nodes in your SSI system.
+	  MAX_NUMNODES will be 2^(This value).
+	  If in doubt, use the default.
+
+config USE_PERCPU_NUMA_NODE_ID
+	def_bool y
+	depends on NUMA
+
+config HAVE_MEMORYLESS_NODES
+	def_bool NUMA
+
+config ARCH_Hi1610
+	def_bool ARCH_HISI
+	select HISI_MBIGEN
+	bool "Hisilicon Hi1610 SoC"
+	help
+	  This enables support for Hisilicon Hi1610 SoC
+endmenu
+
+endif
 
 config ARCH_THUNDER
 	bool "Cavium Inc. Thunder SoC Family"
@@ -172,6 +245,7 @@ config ARCH_XGENE
 	bool "AppliedMicro X-Gene SOC Family"
 	help
 	  This enables support for AppliedMicro X-Gene SOC Family
+
 
 endmenu
 
@@ -442,8 +516,11 @@ config UP_LATE_INIT
        depends on !SMP
 
 config HZ
-	int
-	default 100
+	int "HZ (100,250,1000)"
+	range 100 1000
+	default 250
+	
+
 
 config ARCH_HAS_HOLES_MEMORYMODEL
 	def_bool y if SPARSEMEM
@@ -567,6 +644,12 @@ config CP15_BARRIER_EMULATION
 
 endif
 
+config HISI_AARCH64_NMI
+	bool "Enable NMI Feature on HISI PV660"
+	default n
+	help
+	  Enable the NMI Feature on HISI PV660 chip after cpu dead-locking
+
 endmenu
 
 menu "Boot options"
@@ -625,9 +708,13 @@ menu "Userspace binary formats"
 source "fs/Kconfig.binfmt"
 
 config COMPAT
+	def_bool y
+	depends on AARCH32_EL0 || ARM64_ILP32
+	select COMPAT_BINFMT_ELF
+
+config AARCH32_EL0
 	bool "Kernel support for 32-bit EL0"
 	depends on !ARM64_64K_PAGES
-	select COMPAT_BINFMT_ELF
 	select HAVE_UID16
 	select OLD_SIGSUSPEND3
 	select COMPAT_OLD_SIGACTION
@@ -639,9 +726,16 @@ config COMPAT
 
 	  If you want to execute 32-bit userspace applications, say Y.
 
+config ARM64_ILP32
+	bool "Kernel support for ILP32"
+	help
+	  This option enables support for AArch64 ILP32 user space.  ILP32
+	  is an ABI where long and pointers are 32bits but it uses the AARCH64
+	  instruction set.
+
 config SYSVIPC_COMPAT
 	def_bool y
-	depends on COMPAT && SYSVIPC
+	depends on AARCH32_EL0 && SYSVIPC
 
 endmenu
 
@@ -670,6 +764,8 @@ source "net/Kconfig"
 source "drivers/Kconfig"
 
 source "drivers/firmware/Kconfig"
+
+source "drivers/acpi/Kconfig"
 
 source "fs/Kconfig"
 

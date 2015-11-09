@@ -33,6 +33,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/dma-contiguous.h>
 #include <linux/efi.h>
+#include <linux/swiotlb.h>
 
 #include <asm/fixmap.h>
 #include <asm/sections.h>
@@ -43,7 +44,22 @@
 
 #include "mm.h"
 
+#ifdef CONFIG_COPYCAT_NUMA
+#include <linux/mm.h>
+
+pg_data_t pgdat_list[MAX_NUMNODES];
+EXPORT_SYMBOL(pgdat_list);
+
+/* use the per-pgdat data instead for discontigmem - mbligh */
+unsigned long max_mapnr;
+EXPORT_SYMBOL(max_mapnr);
+
+struct page *mem_map;
+EXPORT_SYMBOL(mem_map);
+#endif
+
 phys_addr_t memstart_addr __read_mostly = 0;
+phys_addr_t arm64_dma_phys_limit __read_mostly;
 
 #ifdef CONFIG_BLK_DEV_INITRD
 static int __init early_initrd(char *p)
@@ -74,6 +90,7 @@ static phys_addr_t max_zone_dma_phys(void)
 	return min(offset + (1ULL << 32), memblock_end_of_DRAM());
 }
 
+#ifndef CONFIG_COPYCAT_NUMA
 static void __init zone_sizes_init(unsigned long min, unsigned long max)
 {
 	struct memblock_region *reg;
@@ -84,7 +101,7 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max)
 
 	/* 4GB maximum for 32-bit only capable devices */
 	if (IS_ENABLED(CONFIG_ZONE_DMA)) {
-		max_dma = PFN_DOWN(max_zone_dma_phys());
+		max_dma = PFN_DOWN(arm64_dma_phys_limit);
 		zone_size[ZONE_DMA] = max_dma - min;
 	}
 	zone_size[ZONE_NORMAL] = max - max_dma;
@@ -112,6 +129,7 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max)
 
 	free_area_init_node(0, zone_size, min, zhole_size);
 }
+#endif
 
 #ifdef CONFIG_HAVE_ARCH_PFN_VALID
 int pfn_valid(unsigned long pfn)
@@ -121,6 +139,7 @@ int pfn_valid(unsigned long pfn)
 EXPORT_SYMBOL(pfn_valid);
 #endif
 
+#ifndef CONFIG_COPYCAT_NUMA
 #ifndef CONFIG_SPARSEMEM
 static void arm64_memory_present(void)
 {
@@ -135,10 +154,29 @@ static void arm64_memory_present(void)
 			       memblock_region_memory_end_pfn(reg));
 }
 #endif
+#endif
+
+static phys_addr_t memory_limit = (phys_addr_t)ULLONG_MAX;
+
+/*
+ * Limit the memory size that was specified via FDT.
+ */
+static int __init early_mem(char *p)
+{
+	if (!p)
+		return 1;
+
+	memory_limit = memparse(p, &p) & PAGE_MASK;
+	pr_notice("Memory limited to %lldMB\n", memory_limit >> 20);
+
+	return 0;
+}
+early_param("mem", early_mem);
 
 void __init arm64_memblock_init(void)
 {
-	phys_addr_t dma_phys_limit = 0;
+
+	memblock_enforce_memory_limit(memory_limit);
 
 	/*
 	 * Register the kernel text, kernel data, initrd, and initial
@@ -154,8 +192,10 @@ void __init arm64_memblock_init(void)
 
 	/* 4GB maximum for 32-bit only capable devices */
 	if (IS_ENABLED(CONFIG_ZONE_DMA))
-		dma_phys_limit = max_zone_dma_phys();
-	dma_contiguous_reserve(dma_phys_limit);
+		arm64_dma_phys_limit = max_zone_dma_phys();
+	else
+		arm64_dma_phys_limit = PHYS_MASK + 1;
+	dma_contiguous_reserve(arm64_dma_phys_limit);
 
 	memblock_allow_resize();
 	memblock_dump_all();
@@ -172,10 +212,31 @@ void __init bootmem_init(void)
 	 * Sparsemem tries to allocate bootmem in memory_present(), so must be
 	 * done after the fixed reservations.
 	 */
+#ifdef CONFIG_COPYCAT_NUMA
+	sparse_memory_present_with_active_regions(MAX_NUMNODES);
+#else
 	arm64_memory_present();
+#endif
 
 	sparse_init();
+
+#ifdef CONFIG_COPYCAT_NUMA
+{
+	unsigned long max_dma;
+	unsigned long max_zone_pfns[MAX_NR_ZONES];
+
+	max_dma = virt_to_phys((void *)(PAGE_OFFSET + (1UL << 32))) >> PAGE_SHIFT;
+
+	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
+#ifdef CONFIG_ZONE_DMA
+	max_zone_pfns[ZONE_DMA] = max_dma;
+#endif
+	max_zone_pfns[ZONE_NORMAL] = max;
+	free_area_init_nodes(max_zone_pfns);
+}
+#else
 	zone_sizes_init(min, max);
+#endif
 
 	high_memory = __va((max << PAGE_SHIFT) - 1) + 1;
 	max_pfn = max_low_pfn = max;
@@ -256,6 +317,8 @@ static void __init free_unused_memmap(void)
  */
 void __init mem_init(void)
 {
+	swiotlb_init(1);
+
 	set_max_mapnr(pfn_to_page(max_pfn) - mem_map);
 
 #ifndef CONFIG_SPARSEMEM_VMEMMAP
