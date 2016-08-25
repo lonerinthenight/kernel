@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/of_platform.h>
 #include <linux/delay.h>
+#include <linux/console.h>
 
 
 
@@ -372,6 +373,135 @@ void hslpc_comm_outb(void *devobj, unsigned long ptaddr,
 }
 
 
+
+static struct simio_ops hslpc_earlyop;
+
+/**
+ * hslpc_early_in - read/input operation specific for hisi LPC earlycon.
+ * @devobj: pointer to device relevant information of the caller.
+ * @inbuf: the buffer where the read back data is populated.
+ * @ptaddr: the io address where read operation targets to.
+ * @dlen: data length in byte to be read each IO operation.
+ * @count: how many IO operations expected.
+ * for earlycon, dlen and count should be one.
+ *
+ * Returns 0 on success, non-zero on fail.
+ *
+ */
+static u64 hslpc_early_in(void *devobj, unsigned long ptaddr, void *inbuf,
+				size_t dlen,unsigned int count)
+{
+	unsigned int ret = 0;
+	struct lpc_cycle_para para;
+	struct hslpc_dev lpcdev;
+	struct uart_port *port;
+	unsigned int rd_data;
+
+	port = (struct uart_port *)devobj;
+	if (!port->mapbase || !port->membase || inbuf ||
+			count != 1 || dlen !=1)
+		return -EINVAL;
+
+	para.opflags = FG_EARLYCON_LPC;
+	para.csize = dlen;
+	lpcdev.membase = port->membase;
+
+	ret = hslpc_target_in(&lpcdev, &para, ptaddr,
+				(unsigned char *)&rd_data, count);
+
+	return (ret) ? : rd_data;
+}
+
+/**
+ * hslpc_early_out - write/output operation specific for hisi LPC earlycon.
+ * @devobj: pointer to device relevant information of the caller.
+ * @outbuf: the buffer where the data to be written is stored.
+ * @ptaddr: the io address where write operation targets to.
+ * @dlen: data length in byte to be written each IO operation.
+ * @count: how many IO operations expected.
+ * for earlycon, dlen and count must be one.
+ *
+ */
+static void hslpc_early_out(void *devobj, unsigned long ptaddr,
+				const void *outbuf,
+				size_t dlen, unsigned int count)
+{
+	struct lpc_cycle_para para;
+	struct hslpc_dev lpcdev;
+	struct uart_port *port;
+
+	port = (struct uart_port *)devobj;
+	if (!port->mapbase || !port->membase || !outbuf ||
+			dlen != 1 || count != 1)
+		return;
+
+	para.opflags = FG_EARLYCON_LPC;
+	para.csize = dlen;
+	lpcdev.membase = port->membase;
+
+	(void)hslpc_target_out(&lpcdev, &para, ptaddr, outbuf, count);
+}
+
+
+/**
+ * early_hslpc8250_setup - initilize the lpc earlycon
+ * @device: pointer to the elarycon device
+ * @options: a option string from earlycon kernel-parameter
+ *
+ * Returns 0 on success, non-zero on fail.
+ *
+ */
+static int __init early_hslpc8250_setup(struct earlycon_device *device,
+						const char *options)
+{
+	char *p;
+	int ret;
+
+	if (!device->port.membase)
+		return -ENODEV;
+
+	if (device->port.iotype != UPIO_MEM)
+		return -EINVAL;
+
+	if (device->options) {
+		p = strchr(device->options, ',');
+		if (p && (p + 1) != '\0') {
+			ret = kstrtoul(++p, 0,
+				(unsigned long *)&device->port.iobase);
+			if (ret || device->port.iobase == 0)
+				return ret ?: -EFAULT;
+		} else
+			device->port.iobase = 0x2f8;
+	} else {
+		device->port.iobase = 0x2f8;
+		device->baud = 0;
+	}
+
+	/*must set iotype as UPIO_PORT for Hip06 indirect-io*/
+	device->port.iotype = UPIO_PORT;
+
+	hslpc_earlyop.pfin = hslpc_early_in;
+	hslpc_earlyop.pfout = hslpc_early_out;
+	hslpc_earlyop.devpara = &device->port;
+
+
+	/* disable interrupts from LPC*/
+	writel(LPC_IRQ_CLEAR, device->port.membase + LPC_REG_IRQ_ST);
+	/* ensure the LPC is available*/
+	while (!(readl(device->port.membase + LPC_REG_OP_STATUS) &
+			LPC_STATUS_IDLE))
+		cpu_relax();
+
+	arm64_set_simops(&hslpc_earlyop);
+
+	return early_serial8250_setup(device, options);
+}
+
+
+EARLYCON_DECLARE(hisilpcuart, early_hslpc8250_setup);
+OF_EARLYCON_DECLARE(hisilpcuart, "hisi,rawlpc-uart", early_hslpc8250_setup);
+
+
 /**
  * hslpc_probe - the probe callback function for hisi lpc device, will finish
  *		all the intialization.
@@ -434,7 +564,10 @@ static int hslpc_probe(struct platform_device *pdev)
 		}
 	}
 
+	/*should lock the earlycon callings at first*/
+	console_lock();
 	arm64_set_simops(lpcdev->io_ops);
+	console_unlock();
 
 	dev_info(&pdev->dev, "hslpc finish probing... simpos = %p earlyconops= %p\n",
 				arm64_simops, &hslpc_earlyop);
