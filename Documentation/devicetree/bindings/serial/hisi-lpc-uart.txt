@@ -1,0 +1,41 @@
+* Hisilicon hip06 UART through low-pin-count
+
+Required properties:
+- compatible : "hisilicon,lpc-uart"
+- reg : offset and length of the I/O port set for the device.
+
+Clock handling:
+  The clock rate of this device is same as the 8250 default clock rate, that
+  is 1843200. No need to define the clock rate in device tree.
+
+Note:
+  This device depends on its parent device whose compatible string is
+  "hisilicon,low-pin-count".
+
+  The format of "reg" property follows the I/O space definition in ISA/EISA
+  binding specification linked to:
+  http://www.firmware.org/1275/bindings/isa/isa0_4d.ps
+
+Example:
+
+	uart0: lpc-uart@2f8 {
+		compatible = "hisilicon,lpc-uart";
+		reg = <0x01 0x2f8 0x08>;
+		status = "disabled";
+	};
+
+Example with low-pin-count parent device:
+
+	isa@a01b0000 {
+		compatible = "hisilicon,low-pin-count";
+		#address-cells = <2>;
+		#size-cells = <1>;
+		reg = <0x0 0xa01b0000 0x0 0x1000>;
+		ranges = <0x01 0x0 0x0 0x0 0x1000>;
+
+		uart0: lpc-uart@2f8 {
+			compatible = "hisilicon,lpc-uart";
+			reg = <0x01 0x2f8 0x08>;
+			status = "disabled";
+		};
+	};
