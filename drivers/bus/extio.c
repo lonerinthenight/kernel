@@ -150,20 +150,16 @@ int simio_range_locate(phys_addr_t startadr, resource_size_t rngsz)
 		return -EINVAL;
 
 	endadr = startadr + rngsz - 1;
-	ret = SIMIO_OUT_CONTIAIN;
 	read_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
 		if (pos->iores.end < startadr)
 			continue;
 
-		if (pos->iores.start > endadr)
-			break;
-
-		/*conflict range... should end the traverse*/
+		/*only care if the range required is contained...*/
 		if (pos->iores.start <= startadr && pos->iores.end >= endadr)
 			ret = 0;
 		else
-			ret = SIMIO_PARTIAL;
+			ret = SIMIO_PARTIAL | SIMIO_OUT_CONTIAIN;
 
 		break;
 	}
