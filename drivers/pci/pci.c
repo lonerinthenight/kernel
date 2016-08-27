@@ -3221,7 +3221,7 @@ int __weak pci_register_io_range(phys_addr_t addr, resource_size_t size)
 
 #ifdef PCI_IOBASE
 	struct io_range *range;
-	resource_size_t allocated_size = 0;
+	resource_size_t allocated_size = PCIBIOS_MIN_IO;
 
 	/* check if the range hasn't been previously recorded */
 	spin_lock(&io_range_lock);
@@ -3270,7 +3270,7 @@ phys_addr_t pci_pio_to_address(unsigned long pio)
 
 #ifdef PCI_IOBASE
 	struct io_range *range;
-	resource_size_t allocated_size = 0;
+	resource_size_t allocated_size = PCIBIOS_MIN_IO;
 
 	if (pio > IO_SPACE_LIMIT)
 		return address;
@@ -3293,7 +3293,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 {
 #ifdef PCI_IOBASE
 	struct io_range *res;
-	resource_size_t offset = 0;
+	resource_size_t offset = PCIBIOS_MIN_IO;
 	unsigned long addr = -1;
 
 	spin_lock(&io_range_lock);
@@ -3305,6 +3305,10 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 		offset += res->size;
 	}
 	spin_unlock(&io_range_lock);
+
+	/*can not find the matched range in translation list, try simio list*/
+	if (addr == -1 && !simio_range_locate(address, 1))
+		addr = address;
 
 	return addr;
 #else

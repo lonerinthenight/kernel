@@ -227,6 +227,12 @@ config KERNEL_MODE_NEON
 config FIX_EARLYCON_MEM
 	def_bool y
 
+config ARM64_INDIRECT_PIO
+	def_bool n
+	help
+	  Support to access the ISA I/O devices with the legacy X86 I/O port
+	  addresses in some SoCs, such as Hisilicon Hip06.
+
 config PGTABLE_LEVELS
 	int
 	default 2 if ARM64_16K_PAGES && ARM64_VA_BITS_36

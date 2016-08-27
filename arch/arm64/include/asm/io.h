@@ -142,12 +142,94 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define writel(v,c)		({ __iowmb(); writel_relaxed((v),(c)); })
 #define writeq(v,c)		({ __iowmb(); writeq_relaxed((v),(c)); })
 
+
+#define BUILDS_RW(bwl, type)						\
+static inline void reads##bwl(const volatile void __iomem *addr,	\
+				void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		type *buf = buffer;					\
+									\
+		do {							\
+			type x = __raw_read##bwl(addr);			\
+			*buf++ = x;					\
+		} while (--count);					\
+	}								\
+}									\
+									\
+static inline void writes##bwl(volatile void __iomem *addr,		\
+				const void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		const type *buf = buffer;				\
+									\
+		do {							\
+			__raw_write##bwl(*buf++, addr);			\
+		} while (--count);					\
+	}								\
+}
+
+BUILDS_RW(b, u8)
+#define readsb readsb
+#define writesb writesb
+
+
 /*
  *  I/O port access primitives.
  */
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+#define PCIBIOS_MIN_IO		0x1000
+
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+#include <linux/extio.h>
+
+
+#define BUILDIO(bw, type)						\
+static inline type in##bw(unsigned long addr)				\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		return read##bw(PCI_IOBASE + addr);			\
+	return extio_inx(addr, sizeof(type));				\
+}							\
+									\
+static inline void out##bw(type value, unsigned long addr)		\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		write##bw(value, PCI_IOBASE + addr);			\
+	else								\
+		extio_out##bw(value, addr, sizeof(type));		\
+}									\
+									\
+static inline void ins##bw(unsigned long addr, void *buffer,		\
+				unsigned int count)			\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		reads##bw(PCI_IOBASE + addr, buffer, count);		\
+	else								\
+		extio_insx(addr, buffer, sizeof(type), count);	\
+}									\
+									\
+static inline void outs##bw(unsigned long addr, const void *buffer,	\
+				unsigned int count)			\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		writes##bw(PCI_IOBASE + addr, buffer, count);		\
+	else								\
+		extio_outsx(addr, buffer, sizeof(type), count);	\
+}
+
+
+BUILDIO(b, u8)
+#define inb inb
+#define outb outb
+#define insb insb
+#define outsb outsb
+
+#endif
+
 
 /*
  * String version of I/O memory access operations.
