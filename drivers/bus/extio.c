@@ -64,14 +64,14 @@ int simio_range_reg(phys_addr_t startadr, resource_size_t rngsz)
 	pre = &simio_list;
 	write_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
+		if (pos->iores.end < startadr)
+			continue;
+
 		if (pos->iores.start > endadr) {
 			pre = pos->ranlink.prev;
 			break;
 		}
-
-		if (pos->iores.end < startadr)
-			continue;
-
+		
 		/*conflict range...*/
 		ret = SIMIO_PARTIAL | SIMIO_IN_CONTIAIN | SIMIO_EQUAL;
 		goto endreg;
@@ -92,7 +92,13 @@ endreg:
 	return ret;
 }
 
-
+/*
+ * unregister a valid range from simio_list.
+ * only support the unregister for a full matched range.
+ *
+ * Returen 0 when successful, negative value for error, postive value means conflict.
+ *
+ */
 int simio_range_unreg(phys_addr_t startadr, resource_size_t rngsz)
 {
 	struct simio_node *pos;
@@ -104,18 +110,19 @@ int simio_range_unreg(phys_addr_t startadr, resource_size_t rngsz)
 		return -EINVAL;
 
 	endadr = startadr + rngsz - 1;
+	ret = -ENXIO;
 	write_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
-		if (pos->iores.start == startadr &&
-			pos->iores.end == endadr) {
+		if (pos->iores.end < startadr)
+			continue;
+
+		if (pos->iores.start == startadr && pos->iores.end == endadr) {
 			ret = 0;
 			list_del(&pos->ranlink);
-			goto endsetops;
 		}
+		break;
 	}
-	ret = -ENXIO;
 
-endsetops:
 	write_unlock(&simio_lock);
 
 	if (!ret)
@@ -126,7 +133,8 @@ endsetops:
 
 
 /*
- * check whether the IO range required is registered.
+ * check whether the IO range required is contained in one registered range.
+ *
  *
  * Returen 0 when successful, negative value for error, postive value means conflict.
  *
@@ -145,19 +153,19 @@ int simio_range_locate(phys_addr_t startadr, resource_size_t rngsz)
 	ret = SIMIO_OUT_CONTIAIN;
 	read_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
-		if (pos->iores.start > endadr)
-			break;
-
 		if (pos->iores.end < startadr)
 			continue;
 
-		/*conflict range...*/
-		if (pos->iores.start > startadr || pos->iores.end < endadr)
-			ret = SIMIO_PARTIAL;
-		else {
-			ret = 0;
+		if (pos->iores.start > endadr)
 			break;
-		}
+
+		/*conflict range... should end the traverse*/
+		if (pos->iores.start <= startadr && pos->iores.end >= endadr)
+			ret = 0;
+		else
+			ret = SIMIO_PARTIAL;
+
+		break;
 	}
 
 	read_unlock(&simio_lock);
@@ -168,7 +176,8 @@ int simio_range_locate(phys_addr_t startadr, resource_size_t rngsz)
 
 /*
  * set a device specific method structure in a register IO range node.
- *
+ * only for the full matched range node.
+ * 
  * Returen 0 when successful, other are for failure.
  */
 int simio_range_setops(phys_addr_t startadr, resource_size_t rngsz,
@@ -183,21 +192,21 @@ int simio_range_setops(phys_addr_t startadr, resource_size_t rngsz,
 		return -EINVAL;
 
 	endadr = startadr + rngsz - 1;
+	ret = -ENXIO;
 	write_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
-		if (pos->iores.start == startadr &&
-			pos->iores.end == endadr) {
+		if (pos->iores.end < startadr)
+			continue;
+
+		if (pos->iores.start == startadr && pos->iores.end == endadr) {
 			pos->regops = ops;
 			ret = 0;
-			goto endsetops;
 		}
+		break;
 	}
-	ret = -ENXIO;
-
-endsetops:
 
 	write_unlock(&simio_lock);
-	return -ret;
+	return ret;
 }
 
 
@@ -220,15 +229,17 @@ int simio_range_getops(unsigned long ptaddr, struct simio_ops **ops)
 	ret = -ENXIO;
 	read_lock(&simio_lock);
 	list_for_each_entry(pos, &simio_list, ranlink) {
-		if (ptaddr >= pos->iores.start && ptaddr <= pos->iores.end) {
+		if (pos->iores.end < ptaddr)
+			continue;
+
+		if (pos->iores.start <= ptaddr) {
 			*ops = pos->regops;
 			ret = 0;
-			break;
 		}
+		break;
 	}
 
 	read_unlock(&simio_lock);
 	return ret;
 }
-
 
