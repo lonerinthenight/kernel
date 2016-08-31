@@ -142,12 +142,113 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define writel(v,c)		({ __iowmb(); writel_relaxed((v),(c)); })
 #define writeq(v,c)		({ __iowmb(); writeq_relaxed((v),(c)); })
 
+
+#define BUILDS_RW(bwl, type)						\
+static inline void reads##bwl(const volatile void __iomem *addr,	\
+				void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		type *buf = buffer;					\
+									\
+		do {							\
+			type x = __raw_read##bwl(addr);			\
+			*buf++ = x;					\
+		} while (--count);					\
+	}								\
+}									\
+									\
+static inline void writes##bwl(volatile void __iomem *addr,		\
+				const void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		const type *buf = buffer;				\
+									\
+		do {							\
+			__raw_write##bwl(*buf++, addr);			\
+		} while (--count);					\
+	}								\
+}
+
+BUILDS_RW(b, u8)
+#define readsb readsb
+#define writesb writesb
+
+
 /*
  *  I/O port access primitives.
  */
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+#include <linux/extio.h>
+
+
+#define BUILDIO(bw, type)						\
+static inline type in##bw(unsigned long addr)				\
+{									\
+	struct simio_node *simop;					\
+	unsigned long offset;						\
+									\
+	simop = simio_range_getops(addr, &offset);			\
+	if (!simop)							\
+		return read##bw(PCI_IOBASE + addr);			\
+	if (simop->regops && simop->regops->pfin)			\
+		return simop->regops->pfin(simop->regops->devpara,	\
+				addr + offset, NULL, sizeof(type), 1);	\
+	return -1;							\
+}							\
+									\
+static inline void out##bw(u8 value, unsigned long addr)		\
+{									\
+	struct simio_node *simop;					\
+	unsigned long offset;						\
+									\
+	simop = simio_range_getops(addr, &offset);			\
+	if (!simop)							\
+		write##bw(value, PCI_IOBASE + addr);			\
+	if (simop->regops && simop->regops->pfout)			\
+		simop->regops->pfout(simop->regops->devpara,		\
+				addr + offset, &value, sizeof(type), 1);\
+}									\
+									\
+static inline void ins##bw(unsigned long addr, void *buffer, unsigned int count)\
+{									\
+	struct simio_node *simop;					\
+	unsigned long offset;						\
+									\
+	simop = simio_range_getops(addr, &offset);			\
+	if (!simop)							\
+		readsb(PCI_IOBASE + addr, buffer, count);		\
+	if (simop->regops && simop->regops->pfin)			\
+		simop->regops->pfin(simop->regops->devpara, addr + offset,	\
+					buffer, sizeof(type), count);	\
+}									\
+									\
+static inline void outs##bw(unsigned long addr, const void *buffer,	\
+				unsigned int count)			\
+{									\
+	struct simio_node *simop;					\
+	unsigned long offset;						\
+									\
+	simop = simio_range_getops(addr, &offset);			\
+	if (!simop)							\
+		writes##bw(PCI_IOBASE + addr, buffer, count);		\
+	if (simop->regops && simop->regops->pfout)			\
+		simop->regops->pfout(simop->regops->devpara, addr + offset,	\
+					buffer, sizeof(type), count);	\
+}
+
+/*only support inb/outb now.*/
+BUILDIO(b, u8)
+#define inb inb
+#define outb outb
+#define insb insb
+#define outsb outsb
+
+#endif
+
 
 /*
  * String version of I/O memory access operations.
