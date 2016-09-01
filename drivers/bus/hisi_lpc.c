@@ -445,6 +445,95 @@ static int hslpc_children_map_sysio(struct device * child, void * data)
 }
 
 
+static int of_hslpc_register_pio(struct device_node *dev, int residx,
+					unsigned long *phyport)
+{
+	const __be32	*addrp;
+	u64		size;
+	unsigned int	flags;
+	u64	taddr;
+
+
+	if (!dev || !phyport)
+		return -EINVAL;
+
+	addrp = of_get_address(dev, residx, &size, &flags);
+	if (addrp == NULL)
+		return -EINVAL;
+
+	if (!(flags & IORESOURCE_IO))
+		return -EINVAL;
+
+	taddr = of_translate_address(dev, addrp);
+	if (taddr == OF_BAD_ADDR)
+		return -EINVAL;
+
+	if (pci_register_io_range(taddr, size)) {
+		pr_err("%s:: register physical range[%llx, %llx) FAIL!\n",
+			dev->name, taddr, size);
+		return -ENXIO;
+	}
+
+	pr_info("%s:: register physical range[%llx, %llx) OK\n",
+			dev->name, taddr, size);
+
+	*phyport = taddr;
+
+	return 0;
+}
+
+
+
+
+static int hslpc_probe_child_dev(struct device *ppdev)
+{
+	int ret;
+
+	if (!ppdev)
+		return -EINVAL;
+
+	ret = 0;
+	/*for device tree, need to scan the child devices now...*/
+	if (!has_acpi_companion(ppdev)) {
+		struct device_node *root, *child;
+
+		root = ppdev->of_node;
+		for_each_available_child_of_node(root, child) {
+			struct platform_device *ptdev;
+			unsigned long cpuio;
+
+			/*register the IO range configured in dt*/
+			ret = of_hslpc_register_pio(child, 0, &cpuio);
+			if (ret) {
+				dev_err(ppdev, "fail to register raw IO for %s\n",
+						child->name);
+				return ret;
+			}
+
+			ptdev = of_platform_device_create(child, NULL,ppdev);
+			if (!ptdev) {
+				dev_err(ppdev, "create platform device fail for %s\n",
+					child->name);
+				return -EFAULT;
+			}
+
+			ret = hslpc_children_map_sysio(&ptdev->dev, &cpuio);
+			if (ret)
+				dev_err(&ptdev->dev, "Mapping sysio for dts child devices FAIL\n");
+		}
+	} else {
+		ret = device_for_each_child(ppdev, NULL,
+					hslpc_children_map_sysio);
+		if (ret)
+			dev_err(ppdev, "Mapping sysio for ACPI child devices FAIL\n");
+	}
+
+	simio_range_scan();
+
+	return ret;
+}
+
+
 /**
  * hslpc_probe - the probe callback function for hisi lpc device, will finish
  *		all the intialization.
@@ -457,7 +546,6 @@ static int hslpc_probe(struct platform_device *pdev)
 {
 	struct resource *iores;
 	struct hslpc_dev *lpcdev;
-	int ret;
 
 	dev_info(&pdev->dev, "hslpc start probing...\n");
 
@@ -495,11 +583,8 @@ static int hslpc_probe(struct platform_device *pdev)
 	lpcdev->io_ops->pfout = hslpc_comm_outb;
 	lpcdev->io_ops->devpara = (void *)lpcdev;
 
-	ret = device_for_each_child(ppdev, NULL, hslpc_children_map_sysio);
-	if (ret)
-		dev_err(ppdev, "Mapping sysio for ACPI child devices FAIL\n");
 
-	return ret;
+	return hslpc_probe_child_dev(&pdev->dev);
 }
 
 /**
@@ -522,6 +607,14 @@ static int hslpc_remove(struct platform_device *pdev)
 }
 
 
+static const struct of_device_id hslpc_pltfm_match[] = {
+	{
+		.compatible = "hisilicon,low-pin-count",
+	},
+	{},
+};
+MODULE_DEVICE_TABLE(of, hslpc_pltfm_match);
+
 static const struct acpi_device_id hslpc_acpi_match[] = {
 	{"HISI0191", },
 	{},
@@ -532,6 +625,7 @@ MODULE_DEVICE_TABLE(acpi, hslpc_acpi_match);
 static struct platform_driver hslpc_driver = {
 	.driver = {
 		.name           = "hisi_lpc",
+		.of_match_table = hslpc_pltfm_match,
 		.acpi_match_table = hslpc_acpi_match,
 	},
 	.probe = hslpc_probe,
