@@ -142,12 +142,123 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define writel(v,c)		({ __iowmb(); writel_relaxed((v),(c)); })
 #define writeq(v,c)		({ __iowmb(); writeq_relaxed((v),(c)); })
 
+
+#define BUILDS_RW(bwl, type)						\
+static inline void reads##bwl(const volatile void __iomem *addr,	\
+				void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		type *buf = buffer;					\
+									\
+		do {							\
+			type x = __raw_read##bwl(addr);			\
+			*buf++ = x;					\
+		} while (--count);					\
+	}								\
+}									\
+									\
+static inline void writes##bwl(volatile void __iomem *addr,		\
+				const void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		const type *buf = buffer;				\
+									\
+		do {							\
+			__raw_write##bwl(*buf++, addr);			\
+		} while (--count);					\
+	}								\
+}
+
+BUILDS_RW(b, u8)
+#define readsb readsb
+#define writesb writesb
+
+
 /*
  *  I/O port access primitives.
  */
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+#define PCIBIOS_MIN_IO		0x1000
+
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+
+typedef u64 (*inhook)(void *devobj, unsigned long ptaddr, void *inbuf,
+				size_t dlen, unsigned int count);
+typedef void (*outhook)(void *devobj, unsigned long ptaddr,
+				const void *outbuf, size_t dlen,
+				unsigned int count);
+
+struct extio_ops {
+	inhook	pfin;
+	outhook	pfout;
+	void *devpara;
+};
+
+
+extern struct extio_ops *arm64_simops __refdata;
+
+
+/*Up to now, only applied to Hip06 LPC. Define as static here.*/
+static inline void arm64_set_simops(struct extio_ops *ops)
+{
+	if (ops)
+		WRITE_ONCE(arm64_simops, ops);
+}
+
+
+#define BUILDIO(bw, type)						\
+static inline type in##bw(unsigned long addr)				\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		return read##bw(PCI_IOBASE + addr);			\
+	return (arm64_simops && arm64_simops->pfin) ?			\
+		arm64_simops->pfin(arm64_simops->devpara, addr, NULL,	\
+					sizeof(type), 1) : -1;		\
+}							\
+									\
+static inline void out##bw(type value, unsigned long addr)		\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		write##bw(value, PCI_IOBASE + addr);			\
+	else								\
+		if (arm64_simops && arm64_simops->pfout)		\
+			arm64_simops->pfout(arm64_simops->devpara, addr,\
+					&value, sizeof(type), 1);	\
+}									\
+									\
+static inline void ins##bw(unsigned long addr, void *buffer, unsigned int count)	\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		reads##bw(PCI_IOBASE + addr, buffer, count);		\
+	else								\
+		if (arm64_simops && arm64_simops->pfin)			\
+			arm64_simops->pfin(arm64_simops->devpara, addr,\
+					buffer, sizeof(type), count);	\
+}									\
+									\
+static inline void outs##bw(unsigned long addr, const void *buffer,	\
+				unsigned int count)			\
+{									\
+	if (addr >= PCIBIOS_MIN_IO)					\
+		writes##bw(PCI_IOBASE + addr, buffer, count);		\
+	else								\
+		if (arm64_simops && arm64_simops->pfin)			\
+			arm64_simops->pfout(arm64_simops->devpara, addr,\
+					buffer, sizeof(type), count);	\
+}
+
+
+BUILDIO(b, u8)
+#define inb inb
+#define outb outb
+#define insb insb
+#define outsb outsb
+
+#endif
+
 
 /*
  * String version of I/O memory access operations.
