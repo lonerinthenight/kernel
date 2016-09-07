@@ -142,12 +142,172 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define writel(v,c)		({ __iowmb(); writel_relaxed((v),(c)); })
 #define writeq(v,c)		({ __iowmb(); writeq_relaxed((v),(c)); })
 
+
+#define BUILDS_RW(bwl, type)						\
+static inline void reads##bwl(const volatile void __iomem *addr,	\
+				void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		type *buf = buffer;					\
+									\
+		do {							\
+			type x = __raw_read##bwl(addr);			\
+			*buf++ = x;					\
+		} while (--count);					\
+	}								\
+}									\
+									\
+static inline void writes##bwl(volatile void __iomem *addr,		\
+				const void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		const type *buf = buffer;				\
+									\
+		do {							\
+			__raw_write##bwl(*buf++, addr);			\
+		} while (--count);					\
+	}								\
+}
+
+BUILDS_RW(b, u8)
+#define readsb readsb
+#define writesb writesb
+
+
 /*
  *  I/O port access primitives.
  */
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+#include <linux/extio.h>
+
+
+#define BUILDIO(bw, type)						\
+static inline type in##bw(unsigned long addr)				\
+{									\
+	struct extio_node *extop;					\
+	unsigned long offset;						\
+									\
+	extop = extio_range_getops(addr, &offset);			\
+	if (!extop)							\
+		return read##bw(PCI_IOBASE + addr);			\
+	if (extop->regops && extop->regops->pfin)			\
+		return extop->regops->pfin(extop->regops->devpara,	\
+				addr + offset, NULL, sizeof(type), 1);	\
+	return -1;							\
+}							\
+									\
+static inline void out##bw(u8 value, unsigned long addr)		\
+{									\
+	struct extio_node *extop;					\
+	unsigned long offset;						\
+									\
+	extop = extio_range_getops(addr, &offset);			\
+	if (!extop)							\
+		write##bw(value, PCI_IOBASE + addr);			\
+	if (extop->regops && extop->regops->pfout)			\
+		extop->regops->pfout(extop->regops->devpara,		\
+				addr + offset, &value, sizeof(type), 1);\
+}									\
+									\
+static inline void ins##bw(unsigned long addr, void *buffer,		\
+				unsigned int count)			\
+{									\
+	struct extio_node *extop;					\
+	unsigned long offset;						\
+									\
+	extop = extio_range_getops(addr, &offset);			\
+	if (!extop)							\
+		readsb(PCI_IOBASE + addr, buffer, count);		\
+	if (extop->regops && extop->regops->pfin)			\
+		extop->regops->pfin(extop->regops->devpara, addr + offset,\
+					buffer, sizeof(type), count);	\
+}									\
+									\
+static inline void outs##bw(unsigned long addr, const void *buffer,	\
+				unsigned int count)			\
+{									\
+	struct extio_node *extop;					\
+	unsigned long offset;						\
+									\
+	extop = extio_range_getops(addr, &offset);			\
+	if (!extop)							\
+		writes##bw(PCI_IOBASE + addr, buffer, count);		\
+	if (extop->regops && extop->regops->pfout)			\
+		extop->regops->pfout(extop->regops->devpara, addr + offset,\
+					buffer, sizeof(type), count);	\
+}
+
+/*only support inb/outb now.*/
+BUILDIO(b, u8)
+#define inb inb
+#define outb outb
+#define insb insb
+#define outsb outsb
+
+
+#if 0
+static inline u8 inb(unsigned long addr)
+{
+	struct simio_node *simop;
+	unsigned long offset;
+
+	simop = simio_range_getops(addr, &offset);
+	if (!simop)
+		return readb(PCI_IOBASE + addr);
+	if (simop->regops && simop->regops->pfin)
+		return simop->regops->pfin(simop->regops->devpara,
+					addr + offset, NULL, sizeof(u8), 1);
+
+	return -1;
+}
+
+static inline void outb(u8 value, unsigned long addr)
+{
+	struct simio_node *simop;
+	unsigned long offset;
+
+	simop = simio_range_getops(addr, &offset);
+	if (!simop)
+		writeb(value, PCI_IOBASE + addr);
+	if (simop->regops && simop->regops->pfout)
+		simop->regops->pfout(simop->regops->devpara,
+					addr + offset, &value, sizeof(u8), 1);
+}
+
+static inline void insb(unsigned long addr, void *buffer, unsigned int count)
+{
+	struct simio_node *simop;
+	unsigned long offset;
+
+	simop = simio_range_getops(addr, &offset);
+	if (!simop)
+		readsb(PCI_IOBASE + addr, buffer, count);
+	if (simop->regops && simop->regops->pfin)
+		simop->regops->pfin(simop->regops->devpara, addr + offset,
+					buffer,	sizeof(u8), count);
+}
+
+static inline void outsb(unsigned long addr, const void *buffer,
+				unsigned int count)
+{
+	struct simio_node *simop;
+	unsigned long offset;
+
+	simop = simio_range_getops(addr, &offset);
+	if (!simop)
+		writesb(PCI_IOBASE + addr, buffer, count);
+	if (simop->regops && simop->regops->pfout)
+		simop->regops->pfout(simop->regops->devpara, addr + offset,
+					buffer,	sizeof(u8), count);
+}
+#endif
+
+#endif
+
 
 /*
  * String version of I/O memory access operations.
@@ -174,15 +334,13 @@ extern void __iomem *ioremap_cache(phys_addr_t phys_addr, size_t size);
 #define iounmap				__iounmap
 
 /*
- * io{read,write}{16,32,64}be() macros
+ * io{read,write}{16,32}be() macros
  */
 #define ioread16be(p)		({ __u16 __v = be16_to_cpu((__force __be16)__raw_readw(p)); __iormb(); __v; })
 #define ioread32be(p)		({ __u32 __v = be32_to_cpu((__force __be32)__raw_readl(p)); __iormb(); __v; })
-#define ioread64be(p)		({ __u64 __v = be64_to_cpu((__force __be64)__raw_readq(p)); __iormb(); __v; })
 
 #define iowrite16be(v,p)	({ __iowmb(); __raw_writew((__force __u16)cpu_to_be16(v), p); })
 #define iowrite32be(v,p)	({ __iowmb(); __raw_writel((__force __u32)cpu_to_be32(v), p); })
-#define iowrite64be(v,p)	({ __iowmb(); __raw_writeq((__force __u64)cpu_to_be64(v), p); })
 
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem
