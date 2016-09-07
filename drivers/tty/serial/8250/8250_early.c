@@ -37,7 +37,7 @@
 #include <asm/io.h>
 #include <asm/serial.h>
 
-static unsigned int __init serial8250_early_in(struct uart_port *port, int offset)
+static unsigned int __init serial8250_early_in_raw(struct uart_port *port, int offset)
 {
 	offset <<= port->regshift;
 
@@ -57,7 +57,7 @@ static unsigned int __init serial8250_early_in(struct uart_port *port, int offse
 	}
 }
 
-static void __init serial8250_early_out(struct uart_port *port, int offset, int value)
+static void __init serial8250_early_out_raw(struct uart_port *port, int offset, int value)
 {
 	offset <<= port->regshift;
 
@@ -79,6 +79,29 @@ static void __init serial8250_early_out(struct uart_port *port, int offset, int 
 		break;
 	}
 }
+
+static inline void __init serial8250_early_out(struct uart_port *port,
+					int offset, int value)
+{
+	if (port->serial_out)
+		port->serial_out(port, offset, value);
+	else {
+		port->serial_out = serial8250_early_out_raw;
+		serial8250_early_out_raw(port, offset, value);
+	}
+}
+
+static inline unsigned int __init serial8250_early_in(struct uart_port *port,
+					int offset)
+{
+	if (port->serial_in)
+		return port->serial_in(port, offset);
+
+	port->serial_in = serial8250_early_in_raw;
+	return serial8250_early_in_raw(port, offset);
+}
+
+
 
 #define BOTH_EMPTY (UART_LSR_TEMT | UART_LSR_THRE)
 
@@ -150,7 +173,6 @@ EARLYCON_DECLARE(uart, early_serial8250_setup);
 OF_EARLYCON_DECLARE(ns16550, "ns16550", early_serial8250_setup);
 OF_EARLYCON_DECLARE(ns16550a, "ns16550a", early_serial8250_setup);
 OF_EARLYCON_DECLARE(uart, "nvidia,tegra20-uart", early_serial8250_setup);
-OF_EARLYCON_DECLARE(uart, "snps,dw-apb-uart", early_serial8250_setup);
 
 #ifdef CONFIG_SERIAL_8250_OMAP
 
