@@ -34,6 +34,10 @@
 
 #include <xen/xen.h>
 
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+#include <linux/extio.h>
+#endif
+
 /*
  * Generic IO read/write.  These perform native-endian accesses.
  */
@@ -142,12 +146,95 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define writel(v,c)		({ __iowmb(); writel_relaxed((v),(c)); })
 #define writeq(v,c)		({ __iowmb(); writeq_relaxed((v),(c)); })
 
+
+#define BUILDS_RW(bwl, type)						\
+static inline void reads##bwl(const volatile void __iomem *addr,	\
+				void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		type *buf = buffer;					\
+									\
+		do {							\
+			type x = __raw_read##bwl(addr);			\
+			*buf++ = x;					\
+		} while (--count);					\
+	}								\
+}									\
+									\
+static inline void writes##bwl(volatile void __iomem *addr,		\
+				const void *buffer, unsigned int count)	\
+{									\
+	if (count) {							\
+		const type *buf = buffer;				\
+									\
+		do {							\
+			__raw_write##bwl(*buf++, addr);			\
+		} while (--count);					\
+	}								\
+}
+
+BUILDS_RW(b, u8)
+#define readsb readsb
+#define writesb writesb
+
+
 /*
  *  I/O port access primitives.
  */
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+
+/*
+ * redefine the in(s)b/out(s)b for indirect-IO.
+ */
+#define inb inb
+static inline u8 inb(unsigned long addr)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	if (arm64_extio_ops && arm64_extio_ops->start <= addr &&
+			addr <= arm64_extio_ops->end)
+		return extio_inb(addr);
+#endif
+	return readb(PCI_IOBASE + addr);
+}
+
+
+#define outb outb
+static inline void outb(u8 value, unsigned long addr)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	if (arm64_extio_ops && arm64_extio_ops->start <= addr &&
+			addr <= arm64_extio_ops->end)
+		return extio_outb(value, addr);
+#endif
+	writeb(value, PCI_IOBASE + addr);
+}
+
+#define insb insb
+static inline void insb(unsigned long addr, void *buffer, unsigned int count)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	if (arm64_extio_ops && arm64_extio_ops->start <= addr &&
+			addr <= arm64_extio_ops->end)
+		return extio_insb(addr, buffer, count);
+#endif
+	readsb(PCI_IOBASE + addr, buffer, count);
+}
+
+#define outsb outsb
+static inline void outsb(unsigned long addr, const void *buffer,
+			 unsigned int count)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	if (arm64_extio_ops && arm64_extio_ops->start <= addr &&
+			addr <= arm64_extio_ops->end)
+		return extio_outsb(addr, buffer, count);
+#endif
+	writesb(PCI_IOBASE + addr, buffer, count);
+}
+
 
 /*
  * String version of I/O memory access operations.
