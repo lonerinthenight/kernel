@@ -690,9 +690,18 @@ static int __of_address_to_resource(struct device_node *dev,
 	memset(r, 0, sizeof(struct resource));
 	if (flags & IORESOURCE_IO) {
 		unsigned long port;
+
 		port = pci_address_to_pio(taddr);
 		if (port == (unsigned long)-1)
 			return -EINVAL;
+		/*
+		 * special processing for non-pci device gurantee the linux start pio
+		 * is not ZERO. Otherwise, some drivers' initialization will fail.
+		 */
+		if (!port && (!IS_ENABLED(CONFIG_OF_ADDRESS_PCI) ||
+				!of_bus_pci_match(dev)))
+			port += 1;
+
 		r->start = port;
 		r->end = port + size - 1;
 	} else {
