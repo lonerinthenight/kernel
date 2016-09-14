@@ -360,6 +360,119 @@ void hisilpc_comm_outb(void *devobj, unsigned long ptaddr,
 
 
 /**
+ * hisilpc_early_in - read/input operation specific for hisi LPC earlycon.
+ * @devobj: pointer to device relevant information of the caller.
+ * @inbuf: the buffer where the read back data is populated.
+ *
+ * for earlycon, dlen and count should be one.
+ *
+ * Return the data read from earlycon on success, error ID on fail.
+ *
+ */
+static unsigned int __init hisilpc_early_in(struct uart_port *port, int offset)
+{
+	unsigned int backval = 0;
+	unsigned int ret = 0;
+	struct lpc_cycle_para para;
+	struct hisilpc_dev lpcdev;
+
+	if (!port->mapbase || !port->iobase || !port->membase)
+		return -EINVAL;
+
+	para.opflags = FG_EARLYCON_LPC;
+	para.csize = 1;
+	lpcdev.membase = port->membase;
+
+	ret = hisilpc_target_in(&lpcdev, &para,
+				port->iobase + (offset << port->regshift),
+				(unsigned char *)&backval, 1);
+	return (ret) ? : backval;
+}
+
+/**
+ * hisilpc_early_out - write/output operation specific for hisi LPC earlycon.
+ * @port: pointer to uart_port of eralycon
+ *
+ * for earlycon, dlen and count should be one.
+ *
+ */
+static void __init hisilpc_early_out(struct uart_port *port, int offset,
+					int value)
+{
+	struct lpc_cycle_para para;
+	struct hisilpc_dev lpcdev;
+
+	if (!port->mapbase || !port->iobase || !port->membase)
+		return;
+
+	para.opflags = FG_EARLYCON_LPC;
+	para.csize = 1;
+	lpcdev.membase = port->membase;
+
+	(void)hisilpc_target_out(&lpcdev, &para,
+				port->iobase + (offset << port->regshift),
+				(unsigned char *)&value, 1);
+}
+
+
+/**
+ * early_hisilpc8250_setup - initilize the lpc earlycon
+ * @device: pointer to the elarycon device
+ * @options: a option string from earlycon kernel-parameter
+ *
+ * Returns 0 on success, non-zero on fail.
+ *
+ */
+static int __init early_hisilpc8250_setup(struct earlycon_device *device,
+						const char *options)
+{
+	char *p;
+	int ret;
+
+	if (!device->port.membase)
+		return -ENODEV;
+
+	if (device->port.iotype != UPIO_MEM)
+		return -EINVAL;
+
+	if (device->options) {
+		p = strchr(device->options, ',');
+		if (p && (p + 1) != '\0') {
+			ret = kstrtoul(++p, 0,
+				(unsigned long *)&device->port.iobase);
+			if (ret || device->port.iobase == 0)
+				return ret ?: -EFAULT;
+		} else
+			device->port.iobase = 0x2f8;
+	} else {
+		device->port.iobase = 0x2f8;
+		device->baud = 0;
+	}
+
+	device->port.serial_in = hisilpc_early_in;
+	device->port.serial_out = hisilpc_early_out;
+	/* must convert iotype to UPIO_PORT for Hip06 indirect-io */
+	device->port.iotype = UPIO_PORT;
+
+	/* disable interrupts from LPC */
+	writel(LPC_IRQ_CLEAR, device->port.membase + LPC_REG_IRQ_ST);
+	/* ensure the LPC is available */
+	while (!(readl(device->port.membase + LPC_REG_OP_STATUS) &
+			LPC_STATUS_IDLE))
+		cpu_relax();
+
+	return early_serial8250_setup(device, options);
+}
+
+
+
+EARLYCON_DECLARE(hisilpcuart, early_hisilpc8250_setup);
+OF_EARLYCON_DECLARE(hisilpcuart, "hisilicon,lpc-uart",
+					early_hisilpc8250_setup);
+
+
+
+/**
  * hisilpc_ischild_ipmi - check whether the designated device is ipmi
  * @dev: the device to be checked.
  * @data: the value used to match the acpi device in checking.
