@@ -19,6 +19,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/clk.h>
+#include <asm-generic/serial.h>
 
 #include "8250.h"
 
@@ -61,8 +62,9 @@ static int of_platform_serial_setup(struct platform_device *ofdev,
 	struct device_node *np = ofdev->dev.of_node;
 	u32 clk, spd, prop;
 	int ret;
+	unsigned long restype;
 
-	memset(port, 0, sizeof *port);
+	memset(port, 0, sizeof(*port));
 	if (of_property_read_u32(np, "clock-frequency", &clk)) {
 
 		/* Get clk rate through clk driver if present */
@@ -82,16 +84,60 @@ static int of_platform_serial_setup(struct platform_device *ofdev,
 	/* If current-speed was set, then try not to change it. */
 	if (of_property_read_u32(np, "current-speed", &spd) == 0)
 		port->custom_divisor = clk / (16 * spd);
-
-	ret = of_address_to_resource(np, 0, &resource);
+	/**
+	 * for hisi, lpc-uart, two reg property entries exist.
+	 * The first must be memory to support flattree earlycon.
+	 * So the IO resource is configured in second reg entry.
+	 */
+	if (of_device_is_compatible(np, "hisilicon,lpc-uart") == 0)
+		ret = of_address_to_resource(np, 0, &resource);
+	else
+		ret = of_address_to_resource(np, 1, &resource);
 	if (ret) {
 		dev_warn(&ofdev->dev, "invalid address\n");
 		goto out;
 	}
 
+	port->flags = UPF_SHARE_IRQ | UPF_BOOT_AUTOCONF | UPF_FIXED_PORT;
+
+	restype = resource.flags & IORESOURCE_TYPE_BITS;
+	dev_info(&ofdev->dev, "type = 0x%lx range = %pR\n", restype,
+			&resource);
+	if (restype == IORESOURCE_IO) {
+		port->iotype = UPIO_PORT;
+		port->iobase = resource.start;
+	} else if (restype == IORESOURCE_MEM) {
+		port->mapbase = resource.start;
+		port->mapsize = resource_size(&resource);
+
+		if (!of_property_read_u32(np, "reg-io-width", &prop)) {
+			switch (prop) {
+			case 1:
+				port->iotype = UPIO_MEM;
+				break;
+			case 2:
+				port->iotype = UPIO_MEM16;
+				break;
+			case 4:
+				port->iotype = of_device_is_big_endian(np) ?
+					       UPIO_MEM32BE : UPIO_MEM32;
+				break;
+			default:
+				dev_warn(&ofdev->dev, "unsupported reg-io-width (%d)\n",
+					 prop);
+				ret = -EINVAL;
+				goto out;
+			}
+		}
+		port->flags |= (UPF_IOREMAP & UPF_FIXED_TYPE);
+	} else {
+		dev_err(&ofdev->dev, "resource(%lu) is not valid resource!",
+				restype);
+		ret = -EINVAL;
+		goto out;
+	}
+
 	spin_lock_init(&port->lock);
-	port->mapbase = resource.start;
-	port->mapsize = resource_size(&resource);
 
 	/* Check for shifted address mapping */
 	if (of_property_read_u32(np, "reg-offset", &prop) == 0)
@@ -111,31 +157,9 @@ static int of_platform_serial_setup(struct platform_device *ofdev,
 		port->line = ret;
 
 	port->irq = irq_of_parse_and_map(np, 0);
-	port->iotype = UPIO_MEM;
-	if (of_property_read_u32(np, "reg-io-width", &prop) == 0) {
-		switch (prop) {
-		case 1:
-			port->iotype = UPIO_MEM;
-			break;
-		case 2:
-			port->iotype = UPIO_MEM16;
-			break;
-		case 4:
-			port->iotype = of_device_is_big_endian(np) ?
-				       UPIO_MEM32BE : UPIO_MEM32;
-			break;
-		default:
-			dev_warn(&ofdev->dev, "unsupported reg-io-width (%d)\n",
-				 prop);
-			ret = -EINVAL;
-			goto out;
-		}
-	}
 
 	port->type = type;
 	port->uartclk = clk;
-	port->flags = UPF_SHARE_IRQ | UPF_BOOT_AUTOCONF | UPF_IOREMAP
-		| UPF_FIXED_PORT | UPF_FIXED_TYPE;
 
 	if (of_find_property(np, "no-loopback-test", NULL))
 		port->flags |= UPF_SKIP_TEST;
@@ -189,13 +213,16 @@ static int of_platform_serial_probe(struct platform_device *ofdev)
 
 	port_type = (unsigned long)match->data;
 	ret = of_platform_serial_setup(ofdev, port_type, &port, info);
-	if (ret)
+	if (ret) {
+		dev_err(&ofdev->dev, "setup of_platform FAIL! ret=%d\n", -ret);
 		goto out;
+	}
 
 	switch (port_type) {
 	case PORT_8250 ... PORT_MAX_8250:
 	{
 		struct uart_8250_port port8250;
+
 		memset(&port8250, 0, sizeof(port8250));
 		port8250.port = port;
 
@@ -216,8 +243,10 @@ static int of_platform_serial_probe(struct platform_device *ofdev)
 		ret = -ENODEV;
 		break;
 	}
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&ofdev->dev, "register 8250 port FAIL! ret=%d\n", -ret);
 		goto out;
+	}
 
 	info->type = port_type;
 	info->line = ret;
@@ -235,6 +264,7 @@ out:
 static int of_platform_serial_remove(struct platform_device *ofdev)
 {
 	struct of_serial_info *info = platform_get_drvdata(ofdev);
+
 	switch (info->type) {
 	case PORT_8250 ... PORT_MAX_8250:
 		serial8250_unregister_port(info->line);
