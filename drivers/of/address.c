@@ -479,6 +479,112 @@ static int of_empty_ranges_quirk(struct device_node *np)
 	return false;
 }
 
+static unsigned long ofaddr_translate_fix(struct device_node *dev,
+					const __be32 *addrp)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	struct device_node *parent;
+	struct of_bus *bus, *pbus;
+	int na, ns, pna, pns;
+	const __be32 *range;
+	unsigned int rlen;
+	int rone;
+	unsigned long regadr;
+	/*__be32 addr[OF_MAX_ADDR_CELLS];*/
+
+
+	/* Get parent & match bus type */
+	parent = of_get_parent(dev);
+	if (parent == NULL)
+		return -1;
+
+	bus = of_match_bus(parent);
+	bus->count_cells(dev, &na, &ns);
+	if (!OF_CHECK_COUNTS(na, ns)) {
+		pr_err("Bad cell count for %s\n", of_node_full_name(dev));
+		regadr = -1;
+		goto endfix;
+	}
+	/* currently, only support isa parent */
+	if (strcmp(parent->name, "isa")) {
+		pr_err("%s is not ISA!\n", of_node_full_name(dev));
+		regadr = -1;
+		goto endfix;
+	}
+
+	range = of_get_property(parent, "ranges", &rlen);
+	/*
+	 * ensure no ranges existing which match the type of the address
+	 * to be fixed.
+	 */
+	if (range && rlen) {
+		dev = parent;
+		of_node_put(parent);
+		parent = of_get_parent(dev);
+		/*
+		 * should not reach here. The cpu physical address should be
+		 * converted in the normal procedure.
+		 */
+		if (!parent) {
+			pr_err("%s:can't get here as the grandson of root!\n",
+					of_node_full_name(dev));
+			regadr = -1;
+			goto endfix;
+		}
+
+		pbus = of_match_bus(parent);
+		pbus->count_cells(dev, &pna, &pns);
+		if (!OF_CHECK_COUNTS(pna, pns)) {
+			pr_err("Bad cell count for %s\n",
+					of_node_full_name(dev));
+			regadr = -1;
+			goto endfix;
+		}
+
+		rlen /= 4;
+		rone = na + pna + ns;
+		for (; rlen >= rone; rlen -= rone, range += rone) {
+			if (!((addrp[0] ^ range[0]) & cpu_to_be32(1))) {
+				pr_err("%s:: must not have bridge mapping!\n",
+					of_node_full_name(dev));
+				regadr = -1;
+				goto endfix;
+			}
+			pr_info("%s:: skip one ranges[0x%x %x]\n",
+				of_node_full_name(dev),
+				be32_to_cpu(range[0]), be32_to_cpu(range[1]));
+		}
+	} else if (range) {
+		regadr = -1;
+		goto endfix;
+	}
+
+#if 0
+	memcpy(addr, addrp, na*4);
+	/* don't need to covert to parent size */
+	if (bus->translate(addr, 0, na))
+		return -1;
+#endif
+	/* only suitable for ISA */
+	regadr = of_read_number(addrp + 1, 1);
+	pr_info("%s:: base IO = 0x%lx\n", of_node_full_name(dev), regadr);
+	if (!arm64_extio_ops || arm64_extio_ops->start > regadr ||
+		arm64_extio_ops->end < regadr) {
+		pr_err("device(%s) resource range[0x%lx - %lx) is invalid!\n",
+			of_node_full_name(dev), regadr,
+			(unsigned long)of_read_number(addrp + na, ns) + regadr);
+		regadr = -1;
+	}
+
+endfix:
+	of_node_put(parent);
+	return regadr;
+#else
+	return -1;
+#endif
+}
+
+
 static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, __be32 *addr,
 			    int na, int ns, int pna, const char *rprop)
@@ -685,17 +791,22 @@ static int __of_address_to_resource(struct device_node *dev,
 	if ((flags & (IORESOURCE_IO | IORESOURCE_MEM)) == 0)
 		return -EINVAL;
 	taddr = of_translate_address(dev, addrp);
-	if (taddr == OF_BAD_ADDR)
-		return -EINVAL;
 	memset(r, 0, sizeof(struct resource));
 	if (flags & IORESOURCE_IO) {
 		unsigned long port;
-		port = pci_address_to_pio(taddr);
+
+		if (taddr == OF_BAD_ADDR)
+			port = ofaddr_translate_fix(dev, addrp);
+		else
+			port = pci_address_to_pio(taddr);
 		if (port == (unsigned long)-1)
 			return -EINVAL;
+
 		r->start = port;
 		r->end = port + size - 1;
 	} else {
+		if (taddr == OF_BAD_ADDR)
+			return -EINVAL;
 		r->start = taddr;
 		r->end = taddr + size - 1;
 	}
