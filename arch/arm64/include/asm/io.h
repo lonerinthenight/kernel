@@ -31,6 +31,7 @@
 #include <asm/early_ioremap.h>
 #include <asm/alternative.h>
 #include <asm/cpufeature.h>
+#include <asm/extio.h>
 
 #include <xen/xen.h>
 
@@ -148,6 +149,34 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
+
+
+/*
+ * redefine the in(s)b/out(s)b for indirect-IO.
+ */
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+#define inb inb
+#define outb outb
+#define insb insb
+#define outsb outsb
+/* external declaration */
+DECLARE_EXTIO(b, u8)
+
+#define inw inw
+#define outw outw
+#define insw insw
+#define outsw outsw
+
+DECLARE_EXTIO(w, u16)
+
+#define inl inl
+#define outl outl
+#define insl insl
+#define outsl outsl
+
+DECLARE_EXTIO(l, u32)
+#endif
+
 
 /*
  * String version of I/O memory access operations.
