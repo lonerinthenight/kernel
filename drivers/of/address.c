@@ -479,6 +479,52 @@ static int of_empty_ranges_quirk(struct device_node *np)
 	return false;
 }
 
+
+int __weak check_indirect_io(u64 taddr)
+{
+	return 0;
+}
+/*
+ * Check whether the current device being translating use indirectIO.
+ *
+ * return 1 if the designated device uses indirectIO, otherwise return 0.
+ */
+static int of_isa_indirect_io(struct device_node *parent,
+                                struct of_bus *bus, __be32 *addr,
+                                int na, int *pna)
+{
+#ifdef CONFIG_ARM64_INDIRECT_PIO
+	unsigned int  flags;
+	u64 taddr;
+	int ret;
+
+	if (!of_bus_isa_match(parent))
+	        return 0;
+	/*
+	 * based on this premise: there is no bridges under isa, so no any
+	 * translations happen on isa child devices and the addr flags are
+	 * kept.
+	 */
+	flags = bus->get_flags(addr);
+	if (!(flags & IORESOURCE_IO))
+	        return 0;
+	/*
+	 * can not call ->translate here in avoid to ruin the data of
+	 * addr.
+	 */
+	taddr = of_read_number(addr + 1, na - 1);
+
+	ret = check_indirect_io(taddr);
+	if (ret && pna)
+		*pna = na;
+
+	return ret;
+#else
+	return check_indirect_io(-1);
+#endif
+}
+
+
 static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, __be32 *addr,
 			    int na, int ns, int pna, const char *rprop)
@@ -505,7 +551,8 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 	 * This code is only enabled on powerpc. --gcl
 	 */
 	ranges = of_get_property(parent, rprop, &rlen);
-	if (ranges == NULL && !of_empty_ranges_quirk(parent)) {
+	if (ranges == NULL && !of_empty_ranges_quirk(parent) &&
+			!of_isa_indirect_io(parent, bus, addr, na, &pna)) {
 		pr_debug("no ranges; cannot translate\n");
 		return 1;
 	}
@@ -611,6 +658,13 @@ static u64 __of_translate_address(struct device_node *dev,
 		/* Apply bus translation */
 		if (of_translate_one(dev, bus, pbus, addr, na, ns, pna, rprop))
 			break;
+		/* end the translation loop when dev is isa indirectIO */
+		if (of_isa_indirect_io(dev, bus, addr, na, NULL)) {
+			result = of_read_number(addr + 1, na - 1);
+			pr_debug("%s:: indirectIO device. addr = 0x%llx\n",
+				dev->name, result);
+			break;
+		}
 
 		/* Complete the move up one level */
 		na = pna;
@@ -688,8 +742,9 @@ static int __of_address_to_resource(struct device_node *dev,
 	if (taddr == OF_BAD_ADDR)
 		return -EINVAL;
 	memset(r, 0, sizeof(struct resource));
-	if (flags & IORESOURCE_IO) {
+	if (flags & IORESOURCE_IO && taddr >= PCIBIOS_MIN_IO) {
 		unsigned long port;
+
 		port = pci_address_to_pio(taddr);
 		if (port == (unsigned long)-1)
 			return -EINVAL;
