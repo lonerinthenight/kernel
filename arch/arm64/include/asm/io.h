@@ -175,6 +175,12 @@ DECLARE_EXTIO(w, u16)
 #define outsl outsl
 
 DECLARE_EXTIO(l, u32)
+
+#define indirect_io_enabled indirect_io_enabled
+extern bool indirect_io_enabled(void);
+
+#define addr_is_indirect_io addr_is_indirect_io
+extern int addr_is_indirect_io(u64 taddr);
 #endif
 
 

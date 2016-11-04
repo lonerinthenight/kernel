@@ -479,6 +479,50 @@ static int of_empty_ranges_quirk(struct device_node *np)
 	return false;
 }
 
+
+/*
+ * of_isa_indirect_io - get the IO address from some isa reg property value.
+ *	For some isa/lpc devices, no ranges property in ancestor node.
+ *	The device addresses are described directly in their regs property.
+ *	This fixup function will be called to get the IO address of isa/lpc
+ *	devices when the normal of_translation failed.
+ *
+ * @parent:	points to the parent dts node;
+ * @bus:		points to the of_bus which can be used to parse address;
+ * @addr:	the address from reg property;
+ * @na:		the address cell counter of @addr;
+ * @presult:	store the address paresed from @addr;
+ *
+ * return 1 when successfully get the I/O address;
+ * 0 will return for some failures.
+ */
+static int of_get_isa_indirect_io(struct device_node *parent,
+				struct of_bus *bus, __be32 *addr,
+				int na, u64 *presult)
+{
+	unsigned int flags;
+	unsigned int rlen;
+
+	/* whether support indirectIO */
+	if (!indirect_io_enabled())
+		return 0;
+
+	if (!of_bus_isa_match(parent))
+		return 0;
+
+	flags = bus->get_flags(addr);
+	if (!(flags & IORESOURCE_IO))
+		return 0;
+
+	/* there is ranges property, apply the normal translation directly. */
+	if (of_get_property(parent, "ranges", &rlen))
+		return 0;
+
+	*presult = of_read_number(addr + 1, na - 1);
+	/* this fixup is only valid for specific I/O range. */
+	return addr_is_indirect_io(*presult);
+}
+
 static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, __be32 *addr,
 			    int na, int ns, int pna, const char *rprop)
@@ -595,6 +639,15 @@ static u64 __of_translate_address(struct device_node *dev,
 			result = of_read_number(addr, na);
 			break;
 		}
+		/*
+		 * For indirectIO device which has no ranges property, get
+		 * the address from reg directly.
+		 */
+		if (of_get_isa_indirect_io(dev, bus, addr, na, &result)) {
+			pr_debug("isa indirectIO matched(%s)..addr = 0x%llx\n",
+				of_node_full_name(dev), result);
+			break;
+		}
 
 		/* Get new parent bus and counts */
 		pbus = of_match_bus(parent);
@@ -688,8 +741,9 @@ static int __of_address_to_resource(struct device_node *dev,
 	if (taddr == OF_BAD_ADDR)
 		return -EINVAL;
 	memset(r, 0, sizeof(struct resource));
-	if (flags & IORESOURCE_IO) {
+	if (flags & IORESOURCE_IO && taddr >= PCIBIOS_MIN_IO) {
 		unsigned long port;
+
 		port = pci_address_to_pio(taddr);
 		if (port == (unsigned long)-1)
 			return -EINVAL;
