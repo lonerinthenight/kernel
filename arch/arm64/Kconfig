@@ -163,6 +163,12 @@ config ARCH_MMAP_RND_COMPAT_BITS_MIN
 config ARCH_MMAP_RND_COMPAT_BITS_MAX
        default 16
 
+config ARM64_INDIRECT_PIO
+	bool "access peripherals with legacy I/O port"
+	help
+	  Support special accessors for ISA I/O devices. This is needed for
+	  SoCs that do not support standard read/write for the ISA range.
+
 config NO_IOPORT_MAP
 	def_bool y if !PCI
 
