@@ -22,6 +22,10 @@
 #define PCI_IOBASE ((void __iomem *)0)
 #endif
 
+#ifndef INDIRECT_MAX_IO
+#define INDIRECT_MAX_IO		0
+#endif
+
 struct extio_ops {
 	unsigned long start; /* inclusive, sys io addr */
 	unsigned long end; /* inclusive, sys io addr */

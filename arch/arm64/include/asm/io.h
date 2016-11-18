@@ -149,6 +149,11 @@ static inline u64 __raw_readq(const volatile void __iomem *addr)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
 
+/* The maximal indirect IO address which is architecture dependent. */
+#ifdef CONFIG_INDIRECT_PIO
+#define INDIRECT_MAX_IO		0x1000
+#endif
+
 /*
  * String version of I/O memory access operations.
  */
