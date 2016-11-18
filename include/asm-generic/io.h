@@ -343,10 +343,6 @@ static inline void writesq(volatile void __iomem *addr, const void *buffer,
 #endif
 #endif /* CONFIG_64BIT */
 
-#ifndef PCI_IOBASE
-#define PCI_IOBASE ((void __iomem *)0)
-#endif
-
 #ifndef IO_SPACE_LIMIT
 #define IO_SPACE_LIMIT 0xffff
 #endif
@@ -359,50 +355,74 @@ static inline void writesq(volatile void __iomem *addr, const void *buffer,
 
 #ifndef inb
 #define inb inb
+#ifdef CONFIG_INDIRECT_PIO
+extern u8 inb(unsigned long addr);
+#else
 static inline u8 inb(unsigned long addr)
 {
 	return readb(PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef inw
 #define inw inw
+#ifdef CONFIG_INDIRECT_PIO
+extern u16 inw(unsigned long addr);
+#else
 static inline u16 inw(unsigned long addr)
 {
 	return readw(PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef inl
 #define inl inl
+#ifdef CONFIG_INDIRECT_PIO
+extern u32 inl(unsigned long addr);
+#else
 static inline u32 inl(unsigned long addr)
 {
 	return readl(PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outb
 #define outb outb
+#ifdef CONFIG_INDIRECT_PIO
+extern void outb(u8 value, unsigned long addr);
+#else
 static inline void outb(u8 value, unsigned long addr)
 {
 	writeb(value, PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outw
 #define outw outw
+#ifdef CONFIG_INDIRECT_PIO
+extern void outw(u16 value, unsigned long addr);
+#else
 static inline void outw(u16 value, unsigned long addr)
 {
 	writew(value, PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outl
 #define outl outl
+#ifdef CONFIG_INDIRECT_PIO
+extern void outl(u32 value, unsigned long addr);
+#else
 static inline void outl(u32 value, unsigned long addr)
 {
 	writel(value, PCI_IOBASE + addr);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef inb_p
@@ -460,53 +480,77 @@ static inline void outl_p(u32 value, unsigned long addr)
 
 #ifndef insb
 #define insb insb
+#ifdef CONFIG_INDIRECT_PIO
+extern void insb(unsigned long addr, void *buffer, unsigned int count);
+#else
 static inline void insb(unsigned long addr, void *buffer, unsigned int count)
 {
 	readsb(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef insw
 #define insw insw
+#ifdef CONFIG_INDIRECT_PIO
+extern void insw(unsigned long addr, void *buffer, unsigned int count);
+#else
 static inline void insw(unsigned long addr, void *buffer, unsigned int count)
 {
 	readsw(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef insl
 #define insl insl
+#ifdef CONFIG_INDIRECT_PIO
+extern void insl(unsigned long addr, void *buffer, unsigned int count);
+#else
 static inline void insl(unsigned long addr, void *buffer, unsigned int count)
 {
 	readsl(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outsb
 #define outsb outsb
+#ifdef CONFIG_INDIRECT_PIO
+extern void outsb(unsigned long addr, const void *buffer, unsigned int count);
+#else
 static inline void outsb(unsigned long addr, const void *buffer,
 			 unsigned int count)
 {
 	writesb(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outsw
 #define outsw outsw
+#ifdef CONFIG_INDIRECT_PIO
+extern void outsw(unsigned long addr, const void *buffer, unsigned int count);
+#else
 static inline void outsw(unsigned long addr, const void *buffer,
 			 unsigned int count)
 {
 	writesw(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef outsl
 #define outsl outsl
+#ifdef CONFIG_INDIRECT_PIO
+extern void outsl(unsigned long addr, const void *buffer, unsigned int count);
+#else
 static inline void outsl(unsigned long addr, const void *buffer,
 			 unsigned int count)
 {
 	writesl(PCI_IOBASE + addr, buffer, count);
 }
+#endif /* CONFIG_INDIRECT_PIO */
 #endif
 
 #ifndef insb_p

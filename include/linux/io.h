@@ -163,4 +163,6 @@ static inline void arch_io_free_memtype_wc(resource_size_t base,
 }
 #endif
 
+#include <linux/extio.h>
+
 #endif /* _LINUX_IO_H */

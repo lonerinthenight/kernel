@@ -549,6 +549,14 @@ config CPU_BIG_ENDIAN
        help
          Say Y if you plan on running a kernel in big-endian mode.
 
+config HAS_EXTIO
+	bool "out-of-line in/out support"
+	default y
+	help
+	  If choosing Y here, the kernel will include the out-of-line
+	  definition for in/out(). This configure should be added if this
+	  feature make sense on the specific architecture.
+
 config SCHED_MC
 	bool "Multi-core scheduler support"
 	help
