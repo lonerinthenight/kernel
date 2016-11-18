@@ -152,5 +152,20 @@ static inline int of_pci_range_to_resource(struct of_pci_range *range,
 }
 #endif /* CONFIG_OF_ADDRESS && CONFIG_PCI */
 
+#if defined(CONFIG_OF_ADDRESS) && defined(CONFIG_INDIRECT_PIO)
+extern bool indirect_io_enabled(void);
+extern bool addr_is_indirect_io(u64 taddr);
+#else
+static inline bool indirect_io_enabled(void)
+{
+	return false;
+}
+
+static inline bool addr_is_indirect_io(u64 taddr)
+{
+	return false;
+}
+#endif /* CONFIG_OF_ADDRESS && CONFIG_INDIRECT_PIO */
+
 #endif /* __OF_ADDRESS_H */
 

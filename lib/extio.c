@@ -20,6 +20,29 @@
 
 struct extio_ops *extio_ops_node;
 
+/**
+ * indirect_io_enabled - check whether indirectIO is enabled.
+ *	arm64_extio_ops will be set only when indirectIO mechanism had been
+ *	initialized.
+ *
+ * Returns true when indirectIO is enabled.
+ */
+bool indirect_io_enabled(void)
+{
+	return !!extio_ops_node;
+}
+
+/**
+ * addr_is_indirect_io - check whether the input taddr is for indirectIO.
+ * @taddr: the io address to be checked.
+ *
+ * Returns true when taddr is in the range.
+ */
+bool addr_is_indirect_io(u64 taddr)
+{
+	return !!(extio_ops_node->start > taddr || extio_ops_node->end < taddr);
+}
+
 BUILD_EXTIO(b, u8)
 
 BUILD_EXTIO(w, u16)
