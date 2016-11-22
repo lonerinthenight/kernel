@@ -2130,12 +2130,4 @@ static inline bool pci_ari_enabled(struct pci_bus *bus)
 /* provide the legacy pci_dma_* API */
 #include <linux/pci-dma-compat.h>
 
-/*
- * define this macro here to refrain from compilation error for some
- * platforms. Please keep this macro at the end of this header file.
- */
-#ifndef PCIBIOS_MIN_IO
-#define PCIBIOS_MIN_IO		0
-#endif
-
 #endif /* LINUX_PCI_H */

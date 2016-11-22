@@ -1,14 +1,15 @@
 Hisilicon Hip06 low-pin-count device
-  Usually LPC controller is part of PCI host bridge, so the legacy ISA ports
-  locate on LPC bus can be accessed direclty. But some SoCs have independent
-  LPC controller, and access the legacy ports by triggering LPC I/O cycles.
-  Hisilicon Hip06 implements this LPC device.
+  Hisilicon Hip06 SoCs implement a Low Pin Count (LPC) controller, which
+  provides I/O access to some legacy ISA devices.
+  Hip06 is based on arm64 architecture where there is no I/O space. So, the
+  I/O ports here are not cpu addresses, and there is no 'ranges' property in
+  LPC device node.
 
 Required properties:
-- compatible: should be "hisilicon,low-pin-count"
+- compatible: should be "hisilicon,hip06-lpc"
 - #address-cells: must be 2 which stick to the ISA/EISA binding doc.
 - #size-cells: must be 1 which stick to the ISA/EISA binding doc.
-- reg: base memory range where the register set of this device is mapped.
+- reg: base memory range where the LPC register set is mapped.
 
 Note:
   The node name before '@' must be "isa" to represent the binding stick to the
@@ -17,7 +18,7 @@ Note:
 Example:
 
 isa@a01b0000 {
-	compatible = "hisilicom,low-pin-count";
+	compatible = "hisilicon,hip06-lpc";
 	#address-cells = <2>;
 	#size-cells = <1>;
 	reg = <0x0 0xa01b0000 0x0 0x1000>;
@@ -26,6 +27,5 @@ isa@a01b0000 {
 		compatible = "ipmi-bt";
 		device_type = "ipmi";
 		reg = <0x01 0xe4 0x04>;
-		status = "disabled";
 	};
 };

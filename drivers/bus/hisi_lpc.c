@@ -456,7 +456,8 @@ static int hisilpc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, lpcdev);
 
-	arm64_set_extops(&lpcdev->io_ops);
+	extio_ops_node = &lpcdev->io_ops;
+	barrier();
 
 	/*
 	 * The children scanning is only for dts mode. For ACPI children,
@@ -469,7 +470,7 @@ static int hisilpc_probe(struct platform_device *pdev)
 
 	if (!ret)
 		dev_info(&pdev->dev, "hslpc end probing. range[0x%lx - %lx]\n",
-			arm64_extio_ops->start, arm64_extio_ops->end);
+			extio_ops_node->start, extio_ops_node->end);
 	else
 		dev_info(&pdev->dev, "hslpc probing is fail(%d)\n", ret);
 

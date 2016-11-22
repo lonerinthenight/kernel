@@ -15,8 +15,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __LINUX_EXTIO_H
-#define __LINUX_EXTIO_H
+#ifndef __ASM_EXTIO_H
+#define __ASM_EXTIO_H
 
 struct extio_ops {
 	unsigned long start;/* inclusive, sys io addr */
@@ -33,7 +33,7 @@ struct extio_ops {
 	void *devpara;
 };
 
-extern struct extio_ops *arm64_extio_ops;
+extern struct extio_ops *extio_ops_node;
 
 #define DECLARE_EXTIO(bw, type)						\
 extern type in##bw(unsigned long addr);					\
@@ -44,51 +44,45 @@ extern void outs##bw(unsigned long addr, const void *buffer, unsigned int count)
 #define BUILD_EXTIO(bw, type)						\
 type in##bw(unsigned long addr)						\
 {									\
-	if (!arm64_extio_ops || arm64_extio_ops->start > addr ||	\
-			arm64_extio_ops->end < addr)			\
+	if (!extio_ops_node || extio_ops_node->start > addr ||	\
+			extio_ops_node->end < addr)			\
 		return read##bw(PCI_IOBASE + addr);			\
-	return arm64_extio_ops->pfin ?					\
-		arm64_extio_ops->pfin(arm64_extio_ops->devpara,		\
+	return extio_ops_node->pfin ?					\
+		extio_ops_node->pfin(extio_ops_node->devpara,		\
 			addr, sizeof(type)) : -1;			\
 }									\
 									\
 void out##bw(type value, unsigned long addr)				\
 {									\
-	if (!arm64_extio_ops || arm64_extio_ops->start > addr ||	\
-			arm64_extio_ops->end < addr)			\
+	if (!extio_ops_node || extio_ops_node->start > addr ||	\
+			extio_ops_node->end < addr)			\
 		write##bw(value, PCI_IOBASE + addr);			\
 	else								\
-		if (arm64_extio_ops->pfout)				\
-			arm64_extio_ops->pfout(arm64_extio_ops->devpara,\
+		if (extio_ops_node->pfout)				\
+			extio_ops_node->pfout(extio_ops_node->devpara,\
 				addr, value, sizeof(type));		\
 }									\
 									\
 void ins##bw(unsigned long addr, void *buffer, unsigned int count)	\
 {									\
-	if (!arm64_extio_ops || arm64_extio_ops->start > addr ||	\
-			arm64_extio_ops->end < addr)			\
+	if (!extio_ops_node || extio_ops_node->start > addr ||	\
+			extio_ops_node->end < addr)			\
 		reads##bw(PCI_IOBASE + addr, buffer, count);		\
 	else								\
-		if (arm64_extio_ops->pfins)				\
-			arm64_extio_ops->pfins(arm64_extio_ops->devpara,\
+		if (extio_ops_node->pfins)				\
+			extio_ops_node->pfins(extio_ops_node->devpara,\
 				addr, buffer, sizeof(type), count);	\
 }									\
 									\
 void outs##bw(unsigned long addr, const void *buffer, unsigned int count)	\
 {									\
-	if (!arm64_extio_ops || arm64_extio_ops->start > addr ||	\
-			arm64_extio_ops->end < addr)			\
+	if (!extio_ops_node || extio_ops_node->start > addr ||	\
+			extio_ops_node->end < addr)			\
 		writes##bw(PCI_IOBASE + addr, buffer, count);		\
 	else								\
-		if (arm64_extio_ops->pfouts)				\
-			arm64_extio_ops->pfouts(arm64_extio_ops->devpara,\
+		if (extio_ops_node->pfouts)				\
+			extio_ops_node->pfouts(extio_ops_node->devpara,\
 				addr, buffer, sizeof(type), count);	\
 }
 
-static inline void arm64_set_extops(struct extio_ops *ops)
-{
-	if (ops)
-		WRITE_ONCE(arm64_extio_ops, ops);
-}
-
-#endif /* __LINUX_EXTIO_H*/
+#endif /* __ASM_EXTIO_H */

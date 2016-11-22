@@ -17,7 +17,7 @@
 
 #include <linux/io.h>
 
-struct extio_ops *arm64_extio_ops;
+struct extio_ops *extio_ops_node;
 
 /**
  * indirect_io_enabled - check whether indirectIO is enabled.
@@ -28,21 +28,19 @@ struct extio_ops *arm64_extio_ops;
  */
 bool indirect_io_enabled(void)
 {
-	return arm64_extio_ops ? true : false;
+	return !!extio_ops_node;
 }
 
 /**
  * addr_is_indirect_io - check whether the input taddr is for indirectIO.
  * @taddr: the io address to be checked.
  *
- * Returns 1 when taddr is in the range; otherwise return 0.
+ * Returns true when taddr is in the range.
  */
-int addr_is_indirect_io(u64 taddr)
+bool addr_is_indirect_io(u64 taddr)
 {
-	if (arm64_extio_ops->start > taddr || arm64_extio_ops->end < taddr)
-		return 0;
-
-	return 1;
+	return !!(extio_ops_node->start <= taddr &&
+		extio_ops_node->end >= taddr);
 }
 
 BUILD_EXTIO(b, u8)

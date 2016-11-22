@@ -24,23 +24,6 @@ struct of_pci_range {
 #define for_each_of_pci_range(parser, range) \
 	for (; of_pci_range_parser_one(parser, range);)
 
-
-#ifndef indirect_io_enabled
-#define indirect_io_enabled indirect_io_enabled
-static inline bool indirect_io_enabled(void)
-{
-	return false;
-}
-#endif
-
-#ifndef addr_is_indirect_io
-#define addr_is_indirect_io addr_is_indirect_io
-static inline int addr_is_indirect_io(u64 taddr)
-{
-	return 0;
-}
-#endif
-
 /* Translate a DMA address from device space to CPU space */
 extern u64 of_translate_dma_address(struct device_node *dev,
 				    const __be32 *in_addr);
@@ -168,6 +151,22 @@ static inline int of_pci_range_to_resource(struct of_pci_range *range,
 	return -ENOSYS;
 }
 #endif /* CONFIG_OF_ADDRESS && CONFIG_PCI */
+
+#if defined(CONFIG_OF_ADDRESS) && defined(CONFIG_ARM64_INDIRECT_PIO)
+extern bool indirect_io_enabled(void);
+extern bool addr_is_indirect_io(u64 taddr);
+#else
+static inline bool indirect_io_enabled(void)
+{
+	return false;
+}
+
+static inline bool addr_is_indirect_io(u64 taddr)
+{
+	return false;
+}
+#endif /* CONFIG_OF_ADDRESS && CONFIG_ARM64_INDIRECT_PIO */ 
+
 
 #endif /* __OF_ADDRESS_H */
 
