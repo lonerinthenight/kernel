@@ -31,6 +31,11 @@ void acpi_processor_init(void);
 void acpi_platform_init(void);
 void acpi_pnp_init(void);
 void acpi_int340x_thermal_init(void);
+#ifdef CONFIG_INDIRECT_PIO
+void acpi_legacyio_scan_init(void);
+#else
+static inline void acpi_legacyio_scan_init(void) {}
+#endif
 #ifdef CONFIG_ARM_AMBA
 void acpi_amba_init(void);
 #else

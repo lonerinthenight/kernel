@@ -503,6 +503,7 @@ int hisilpc_cal_iosum(struct device *dev, resource_size_t *sum,
 	return -ENODEV;
 }
 
+
 int hisilpc_child_map_sysio(struct device *child, void *data)
 {
 	int ret;
@@ -519,7 +520,7 @@ int hisilpc_child_map_sysio(struct device *child, void *data)
 		dev_err(child, "No any IO!\n");
 		return -ENXIO;
 	}
-
+#if 0
 	/* For ACPI, need to convert device IO to system IO. */
 	if (has_acpi_companion(child)) {
 		unsigned long sys_start;
@@ -534,7 +535,7 @@ int hisilpc_child_map_sysio(struct device *child, void *data)
 		res->start = sys_start;
 		res->end = sys_start + resource_size(res) - 1;
 	}
-
+#endif
 	root = (struct resource *)data;
 	ret = devm_request_resource(child, root, res);
 	if (ret)
@@ -599,11 +600,35 @@ static int hisilpc_probe(struct platform_device *pdev)
 		return -EFAULT;
 	}
 
+	ret = devm_request_resource(&pdev->dev, &ioport_resource,
+			range->io_host.res);
+	if (ret) {
+		dev_err(&pdev->dev, "request Root I/O(%pR) FAIL(%d)\n",
+			range->io_host.res, -ret);
+		return ret;
+	}
+
 	/*
-	 * Now, OF children can start scanning. For ACPI mode, all these
-	 * child devices are created during the acpi bus scanning.
+	 * For OF children, the scanning hasn't started during the platform
+	 * bus scanning. Here will start the scanning remained.
+	 * For ACPI children, a special handler is added for our LPC
+	 * controller to delay the children scanning. The real scanning
+	 * will start here as it is easy to convert LPC I/O to linux PIO now.
 	 */
 	if (!has_acpi_companion(&pdev->dev)) {
+#if 0
+		struct device_node *parent, *child;
+
+		parent = to_of_node(&pdev->dev.fwnode);
+		for_each_child_of_node(parent, child) {
+			if (!of_platform_device_create(child, NULL,
+							&pdev->dev)) {
+				dev_err(&child->dev, "OF:create child platform device FAIL!\n");
+				return -EFAULT;
+			}
+		}
+		of_node_set_flag(parent, OF_POPULATED_BUS);
+#endif
 		ret = of_platform_populate(pdev->dev.of_node, NULL, NULL,
 				&pdev->dev);
 		if (ret) {
@@ -611,21 +636,23 @@ static int hisilpc_probe(struct platform_device *pdev)
 				-ret);
 			return ret;
 		}
-	}
 
-	ret = devm_request_resource(&pdev->dev, &ioport_resource,
-		range->io_host.res);
-	if (ret) {
-		dev_err(&pdev->dev, "request Root I/O(%pR) FAIL(%d)\n",
-			range->io_host.res, -ret);
-		return ret;
-	}
+		/* request linux PIO ranges for children. probably is not needed*/
+		ret = device_for_each_child(&pdev->dev, range->io_host.res,
+				hisilpc_child_map_sysio);
+		if (ret)
+			return ret;
+	} else {
+		struct acpi_device *parent, *child;
 
-	/* request linux PIO ranges for children. */
-	ret = device_for_each_child(&pdev->dev, range->io_host.res,
-			hisilpc_child_map_sysio);
-	if (ret)
-		return ret;
+		parent = to_acpi_device_node(pdev->dev.fwnode);
+		list_for_each_entry(child, &parent->children, node) {
+			if (acpi_legacyio_create(child, NULL)) {
+				dev_err(&child->dev, "ACPI:create child platform device FAIL!\n");
+				return -EFAULT;
+			}
+		}
+	}
 
 	lpcdev->io_ops.devpara = lpcdev;
 	lpcdev->io_ops.pfin = hisilpc_comm_in;

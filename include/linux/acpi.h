@@ -577,6 +577,9 @@ enum acpi_reconfig_event  {
 int acpi_reconfig_notifier_register(struct notifier_block *nb);
 int acpi_reconfig_notifier_unregister(struct notifier_block *nb);
 
+extern struct platform_device *acpi_legacyio_create(struct acpi_device *adev,
+			struct property_entry *properties);
+
 #else	/* !CONFIG_ACPI */
 
 #define acpi_disabled 1
@@ -762,6 +765,12 @@ static inline int acpi_reconfig_notifier_register(struct notifier_block *nb)
 static inline int acpi_reconfig_notifier_unregister(struct notifier_block *nb)
 {
 	return -EINVAL;
+}
+
+static inline struct platform_device *acpi_legacyio_create(struct acpi_device *adev,
+					struct property_entry *properties)
+{
+	return NULL;
 }
 
 #endif	/* !CONFIG_ACPI */
