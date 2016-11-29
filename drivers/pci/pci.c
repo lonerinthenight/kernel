@@ -25,6 +25,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/interrupt.h>
 #include <linux/device.h>
+#include <linux/extio.h>
 #include <linux/pm_runtime.h>
 #include <linux/pci_hotplug.h>
 #include <linux/vmalloc.h>
@@ -3263,7 +3264,7 @@ int __weak pci_register_io_range(phys_addr_t addr, resource_size_t size)
 
 #ifdef PCI_IOBASE
 	struct io_range *range;
-	resource_size_t allocated_size = INDIRECT_MAX_IO;
+	resource_size_t allocated_size = EXTIO_LIMIT;
 
 	/* check if the range hasn't been previously recorded */
 	spin_lock(&io_range_lock);
@@ -3312,7 +3313,7 @@ phys_addr_t pci_pio_to_address(unsigned long pio)
 
 #ifdef PCI_IOBASE
 	struct io_range *range;
-	resource_size_t allocated_size = INDIRECT_MAX_IO;
+	resource_size_t allocated_size = EXTIO_LIMIT;
 
 	if (pio > IO_SPACE_LIMIT)
 		return address;
@@ -3335,7 +3336,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 {
 #ifdef PCI_IOBASE
 	struct io_range *res;
-	resource_size_t offset = INDIRECT_MAX_IO;
+	resource_size_t offset = EXTIO_LIMIT;
 	unsigned long addr = -1;
 
 	spin_lock(&io_range_lock);

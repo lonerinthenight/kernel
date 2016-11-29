@@ -61,7 +61,6 @@ config ARCH_HAS_FAST_MULTIPLIER
 
 config INDIRECT_PIO
 	bool "access peripherals with legacy I/O port"
-	depends on HAS_EXTIO
 	help
 	  Support special accessors for ISA I/O devices. This is needed for
 	  SoCs that do not support standard read/write for the ISA range.

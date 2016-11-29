@@ -19,6 +19,7 @@
 #include <linux/acpi.h>
 #include <linux/console.h>
 #include <linux/delay.h>
+#include <linux/extio.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -27,6 +28,9 @@
 #include <linux/pci.h>
 #include <linux/serial_8250.h>
 #include <linux/slab.h>
+
+#define HISILPC_DEFAUL_ALIGN	0x01
+#define HISILPC_IO_SIZE		0x400
 
 /*
  * setting this bit means each IO operation will target to different port address;
@@ -42,6 +46,7 @@ struct lpc_cycle_para {
 struct hisilpc_dev {
 	spinlock_t cycle_lock;
 	void __iomem  *membase;
+	/*struct extio_node node_ent;*/
 	struct extio_ops io_ops;
 };
 
@@ -411,6 +416,134 @@ static void hisilpc_comm_outs(void *devobj, unsigned long ptaddr,
 	} while (cntleft);
 }
 
+int hisilpc_cal_iosum(struct device *dev, resource_size_t *sum,
+		resource_size_t *io_min)
+{
+	u64 start;
+	resource_size_t io_max;
+
+	if (!dev || !dev->fwnode || !sum || !io_min) {
+		pr_err("hisilpc:: cal_iosum... invalid parameters!\n");
+		return -EINVAL;
+	}
+
+	*sum = 0;
+	*io_min = 0;
+	io_max = 0;
+	/* for OFT devices */
+	if (is_of_node(dev->fwnode)) {
+		struct device_node *parent, *child;
+
+		parent = to_of_node(dev->fwnode);
+		for_each_child_of_node(parent, child) {
+			u64 size;
+			const __be32	*addrp;
+			unsigned int	flags;
+			/*
+			 * for hisilpc, only one 'reg' and without IO 'ranges'
+			 * in the children.
+			 */
+			addrp = of_get_address(child, 0, &size, &flags);
+			if (addrp == NULL)
+				return -EINVAL;
+			/*
+			 * for hisilpc, the address stick to ISA binding
+			 * spec.
+			 */
+			start = of_read_number(addrp + 1, 1);
+			if (*io_min > (resource_size_t)start)
+				*io_min = (resource_size_t)start;
+			if (io_max <= start + size)
+				io_max = start + size;
+		}
+
+		*sum = io_max - *io_min + 1;
+		return 0;
+	}
+
+	/* for acpi devices */
+	if (is_acpi_node(dev->fwnode)) {
+		struct acpi_device *parent, *child;
+
+		parent = to_acpi_device_node(dev->fwnode);
+		list_for_each_entry(child, &parent->children, node) {
+			int ret;
+			struct resource_entry *entry;
+			struct list_head resource_list;
+
+			INIT_LIST_HEAD(&resource_list);
+			ret = acpi_dev_get_resources(child, &resource_list,
+						     acpi_dev_filter_resource_type_cb,
+						     (void *)IORESOURCE_IO);
+			if (ret < 0) {
+				dev_warn(dev, "failed to parse IO _CRS method, error code %d\n",
+					ret);
+				return ret;
+			}
+			if (ret == 0) {
+				dev_warn(dev, "No IO resources in _CRS\n");
+				return -EFAULT;
+			}
+
+			resource_list_for_each_entry(entry, &resource_list) {
+				start = entry->res->start;
+				if (*io_min > start)
+					*io_min = start;
+				if (io_max < entry->res->end)
+					io_max = entry->res->end;
+			}
+			acpi_dev_free_resource_list(&resource_list);
+		}
+
+		*sum = io_max - *io_min + 1;
+		return 0;
+	}
+
+	/* don't support other device node */
+	return -ENODEV;
+}
+
+int hisilpc_child_map_sysio(struct device *child, void *data)
+{
+	int ret;
+	struct resource *res, *root;
+	struct platform_device *pltdev;
+
+	if (!child || !child->parent)
+		return -EINVAL;
+
+	pltdev = to_platform_device(child);
+	/* Only one resource for hisi lpc */
+	res = platform_get_resource(pltdev, IORESOURCE_IO, 0);
+	if (!res) {
+		dev_err(child, "No any IO!\n");
+		return -ENXIO;
+	}
+
+	/* For ACPI, need to convert device IO to system IO. */
+	if (has_acpi_companion(child)) {
+		unsigned long sys_start;
+
+		sys_start = extio_translate(child->fwnode, res->start);
+		if (sys_start == -1) {
+			dev_err(child,
+				"FAIL:convert resource(%pR) to system IO\n",
+				res);
+			return -ENXIO;
+		}
+		res->start = sys_start;
+		res->end = sys_start + resource_size(res) - 1;
+	}
+
+	root = (struct resource *)data;
+	ret = devm_request_resource(child, root, res);
+	if (ret)
+		dev_err(child, "request IO resource(%pR) FAIL(%d)!\n",
+				res, -ret);
+
+	return ret;
+}
+
 /**
  * hisilpc_probe - the probe callback function for hisi lpc device,
  *		will finish all the intialization.
@@ -421,9 +554,12 @@ static void hisilpc_comm_outs(void *devobj, unsigned long ptaddr,
  */
 static int hisilpc_probe(struct platform_device *pdev)
 {
-	struct resource *iores;
-	struct hisilpc_dev *lpcdev;
 	int ret;
+	resource_size_t io_start;
+	resource_size_t iosize;
+	struct resource *iores;
+	struct extio_range *range;
+	struct hisilpc_dev *lpcdev;
 
 	dev_info(&pdev->dev, "probing hslpc...\n");
 
@@ -440,39 +576,66 @@ static int hisilpc_probe(struct platform_device *pdev)
 				(-PTR_ERR(lpcdev->membase)));
 		return PTR_ERR(lpcdev->membase);
 	}
+
 	/*
-	 * The first PCIBIOS_MIN_IO is reserved specifically for indirectIO.
-	 * It will separate indirectIO range from pci host bridge to
-	 * avoid the possible PIO conflict.
-	 * Set the indirectIO range directly here.
+	 * For FDT mode, indirect IO registering must be done before
+	 * scanning children since the 'reg' property parsing depends on
+	 * this bus node in the extio list. For ACPI mode, the bus scanning
+	 * doesn't depends on this node, but the linux PIO allocation for
+	 * children need it.
 	 */
-	lpcdev->io_ops.start = 0;
-	lpcdev->io_ops.end = INDIRECT_MAX_IO - 1;
+	ret = hisilpc_cal_iosum(&pdev->dev, &iosize, &io_start);
+	if (ret)
+		return ret;
+
+	if (!iosize) {
+		dev_err(&pdev->dev, "No any I/O space requested!!\n");
+		return -EFAULT;
+	}
+
+	range = register_extio_ranges(pdev->dev.fwnode, iosize, io_start);
+	if (range) {
+		dev_err(&pdev->dev, "register extio bus I/O FAIL!\n");
+		return -EFAULT;
+	}
+
+	/*
+	 * Now, OF children can start scanning. For ACPI mode, all these
+	 * child devices are created during the acpi bus scanning.
+	 */
+	if (!has_acpi_companion(&pdev->dev)) {
+		ret = of_platform_populate(pdev->dev.of_node, NULL, NULL,
+				&pdev->dev);
+		if (ret) {
+			dev_err(&pdev->dev, "scan children FAIL(%d)\n",
+				-ret);
+			return ret;
+		}
+	}
+
+	ret = devm_request_resource(&pdev->dev, &ioport_resource,
+		range->io_host.res);
+	if (ret) {
+		dev_err(&pdev->dev, "request Root I/O(%pR) FAIL(%d)\n",
+			range->io_host.res, -ret);
+		return ret;
+	}
+
+	/* request linux PIO ranges for children. */
+	ret = device_for_each_child(&pdev->dev, range->io_host.res,
+			hisilpc_child_map_sysio);
+	if (ret)
+		return ret;
+
 	lpcdev->io_ops.devpara = lpcdev;
 	lpcdev->io_ops.pfin = hisilpc_comm_in;
 	lpcdev->io_ops.pfout = hisilpc_comm_out;
 	lpcdev->io_ops.pfins = hisilpc_comm_ins;
 	lpcdev->io_ops.pfouts = hisilpc_comm_outs;
 
+	range->ops = &lpcdev->io_ops;
+
 	platform_set_drvdata(pdev, lpcdev);
-
-	extio_ops_node = &lpcdev->io_ops;
-	barrier();
-
-	/*
-	 * The children scanning is only for dts mode. For ACPI children,
-	 * the corresponding devices had be created during acpi scanning.
-	 */
-	ret = 0;
-	if (!has_acpi_companion(&pdev->dev))
-		ret = of_platform_populate(pdev->dev.of_node, NULL, NULL,
-				&pdev->dev);
-
-	if (!ret)
-		dev_info(&pdev->dev, "hslpc end probing. range[0x%lx - %lx]\n",
-			extio_ops_node->start, extio_ops_node->end);
-	else
-		dev_info(&pdev->dev, "hslpc probing is fail(%d)\n", ret);
 
 	return ret;
 }

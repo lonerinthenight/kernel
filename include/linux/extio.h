@@ -18,13 +18,18 @@
 #ifndef __LINUX_EXTIO_H
 #define __LINUX_EXTIO_H
 
-#ifndef PCI_IOBASE
-#define PCI_IOBASE ((void __iomem *)0)
+#include <linux/pci.h>
+
+#if defined(CONFIG_PCI) && defined(CONFIG_INDIRECT_PIO)
+#define EXTIO_LIMIT	PCIBIOS_MIN_IO
+#elif defined(CONFIG_INDIRECT_PIO)
+#define EXTIO_LIMIT	0x1000
+#else
+#define EXTIO_LIMIT	0x00
 #endif
 
-#ifndef INDIRECT_MAX_IO
-#define INDIRECT_MAX_IO		0
-#endif
+#define IO_RANGE_IOEXT (resource_size_t)(-1ull)
+
 
 struct extio_ops {
 	unsigned long start; /* inclusive, sys io addr */
@@ -43,6 +48,90 @@ struct extio_ops {
 
 extern struct extio_ops *extio_ops_node;
 
+struct extio_win {
+	struct resource *res;
+	resource_size_t offset;
+	resource_size_t iostart;
+	struct resource __res;
+};
+
+struct extio_range {
+	struct list_head list;
+	struct fwnode_handle *fwnode; /* search key */
+
+	struct extio_win io_host;
+	struct extio_ops *ops;
+};
+
+#ifdef CONFIG_INDIRECT_PIO
+extern unsigned long extio_translate(struct fwnode_handle *node,
+		unsigned long dev_io);
+extern struct extio_range *register_extio_ranges(struct fwnode_handle *fwnode,
+		resource_size_t size, resource_size_t min_bus_io);
+
+extern struct extio_range * extio_getrange_byaddr(unsigned long addr);
+#endif
+
+#define BUILD_EXTIO(bw, type)						\
+type in##bw(unsigned long addr)						\
+{									\
+	if (addr < EXTIO_LIMIT) {					\
+		struct extio_range *range;				\
+									\
+		range = extio_getrange_byaddr(addr);			\
+		if (!range || !range->ops->pfin)			\
+			return -1;					\
+		return range->ops->pfin(range->ops->devpara,		\
+				addr - range->io_host.offset,		\
+				sizeof(type));				\
+	}								\
+	return readb(PCI_IOBASE + addr);				\
+}									\
+									\
+void out##bw(type value, unsigned long addr)				\
+{									\
+	if (addr < EXTIO_LIMIT) {					\
+		struct extio_range *range;				\
+									\
+		range = extio_getrange_byaddr(addr);			\
+		if (range->ops->pfout)					\
+			range->ops->pfout(range->ops->devpara,		\
+				addr - range->io_host.offset,		\
+				value, sizeof(type));			\
+	}								\
+	write##bw(value, PCI_IOBASE + addr);				\
+}									\
+									\
+void ins##bw(unsigned long addr, void *buf, unsigned int count)		\
+{									\
+	if (addr < EXTIO_LIMIT) {					\
+		struct extio_range *range;				\
+									\
+		range = extio_getrange_byaddr(addr);			\
+		if (range->ops->pfins)					\
+			range->ops->pfins(range->ops->devpara,		\
+				addr - range->io_host.offset,		\
+				buf, sizeof(type), count);		\
+	}								\
+	reads##bw(PCI_IOBASE + addr, buf, count);			\
+}									\
+									\
+void outs##bw(unsigned long addr, const void *buf, unsigned int count)	\
+{									\
+	if (addr < EXTIO_LIMIT) {					\
+		struct extio_range *range;				\
+									\
+		range = extio_getrange_byaddr(addr);			\
+		if (range->ops->pfouts)					\
+			range->ops->pfouts(range->ops->devpara, 	\
+				addr - range->io_host.offset,		\
+				buf, sizeof(type), count);		\
+	}								\
+	writes##bw(PCI_IOBASE + addr, buf, count);			\
+}
+
+
+#if 0
 #define BUILD_EXTIO(bw, type)						\
 type in##bw(unsigned long addr)						\
 {									\
@@ -86,5 +175,6 @@ void outs##bw(unsigned long addr, const void *buffer, unsigned int count)	\
 			extio_ops_node->pfouts(extio_ops_node->devpara,	\
 				addr, buffer, sizeof(type), count);	\
 }
+#endif
 
 #endif /* __LINUX_EXTIO_H */

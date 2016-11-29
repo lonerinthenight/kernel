@@ -152,20 +152,13 @@ static inline int of_pci_range_to_resource(struct of_pci_range *range,
 }
 #endif /* CONFIG_OF_ADDRESS && CONFIG_PCI */
 
-#if defined(CONFIG_OF_ADDRESS) && defined(CONFIG_INDIRECT_PIO)
-extern bool indirect_io_enabled(void);
-extern bool addr_is_indirect_io(u64 taddr);
-#else
-static inline bool indirect_io_enabled(void)
+#ifndef CONFIG_INDIRECT_PIO
+static inline unsigned long extio_translate(struct fwnode_handle *node,
+		unsigned long dev_io)
 {
-	return false;
+	return -1;
 }
-
-static inline bool addr_is_indirect_io(u64 taddr)
-{
-	return false;
-}
-#endif /* CONFIG_OF_ADDRESS && CONFIG_INDIRECT_PIO */
+#endif
 
 #endif /* __OF_ADDRESS_H */
 
