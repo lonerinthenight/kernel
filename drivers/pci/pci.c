@@ -3241,7 +3241,7 @@ int pci_request_regions_exclusive(struct pci_dev *pdev, const char *res_name)
 					((1 << 6) - 1), res_name);
 }
 EXPORT_SYMBOL(pci_request_regions_exclusive);
-
+#if 0
 #ifdef PCI_IOBASE
 struct io_range {
 	struct list_head list;
@@ -3356,6 +3356,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 	return (unsigned long) address;
 #endif
 }
+#endif
 
 /**
  *	pci_remap_iospace - Remap the memory mapped I/O space
