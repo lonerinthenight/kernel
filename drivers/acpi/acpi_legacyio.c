@@ -13,6 +13,10 @@
 #include <linux/platform_device.h>
 #include <linux/extio.h>
 
+#include "internal.h"
+
+ACPI_MODULE_NAME("leagcy IO");
+
 /*
  * all the matched acpi devices will delay the creation of the physical
  * devices.
@@ -91,7 +95,7 @@ struct platform_device *acpi_legacyio_create(struct acpi_device *adev,
 		list_for_each_entry(rentry, &resource_list, node) {
 			if (rentry->res->flags & IORESOURCE_IO) {
 				unsigned long sys_start;
-				
+
 				sys_start = extio_translate(&adev->parent->fwnode, rentry->res->start);
 				if (sys_start == -1) {
 					dev_err(&adev->dev, "FAIL:convert resource(%pR) to system IO\n",

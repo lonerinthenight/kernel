@@ -17,12 +17,13 @@
 
 #include <linux/io.h>
 #include <linux/ioport.h>
+#include <linux/extio.h>
 #include <linux/of.h>
 #include <linux/acpi.h>
 #include <linux/slab.h>
-#include <linux/extio.h>
+#include <linux/sizes.h>
 
-#ifdef PCI_IOBASE
+#if defined(PCI_IOBASE) || defined(CONFIG_INDIRECT_PIO)
 struct io_range {
 	struct list_head list;
 	phys_addr_t start;
@@ -49,12 +50,16 @@ int __weak pci_register_io_range(phys_addr_t addr, resource_size_t size)
 {
 	int err = 0;
 
-#ifdef PCI_IOBASE
+#if defined(PCI_IOBASE) || defined(CONFIG_INDIRECT_PIO)
 	struct io_range *range;
 	resource_size_t allocated_size = 0;
 
 	if (!size)
 		return -EINVAL;
+#ifdef CONFIG_INDIRECT_PIO
+	if (addr != IO_RANGE_IOEXT)
+		return -EINVAL;
+#endif
 
 	/* check if the range hasn't been previously recorded */
 	if (addr == IO_RANGE_IOEXT && legacy_iospace.pio_node)
@@ -122,6 +127,7 @@ end_register:
 	return err;
 }
 
+#ifdef CONFIG_PCI
 phys_addr_t pci_pio_to_address(unsigned long pio)
 {
 	phys_addr_t address = (phys_addr_t)OF_BAD_ADDR;
@@ -176,6 +182,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 	return (unsigned long) address;
 #endif
 }
+#endif
 
 #if 0
 #ifdef CONFIG_INDIRECT_PIO
@@ -193,7 +200,7 @@ struct extio_range *extio_ent;
 int register_extio_range(struct fwnode_handle *fwnode,
 			struct extio_range *range)
 {
-	int ret = 0;
+	int ret;
 
 	if (!range || (!is_of_node(fwnode) && !is_acpi_node(fwnode))) {
 		pr_err("The device is not ACPI and OF!\n");

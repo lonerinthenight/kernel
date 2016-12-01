@@ -87,6 +87,15 @@ struct extio_windows {
 
 extern struct extio_range *extio_ent;
 
+/* add CONFIG_PCI to be compatible */
+#ifdef CONFIG_PCI
+extern int pci_register_io_range(phys_addr_t addr, resource_size_t size);
+extern unsigned long pci_address_to_pio(phys_addr_t addr);
+extern phys_addr_t pci_pio_to_address(unsigned long pio);
+#else
+static inline unsigned long pci_address_to_pio(phys_addr_t addr) { return -1; }
+#endif
+
 #if defined(PCI_IOBASE) && defined(CONFIG_INDIRECT_PIO)
 extern int register_extio_range(struct fwnode_handle *fwnode,
 			struct extio_range *range);
@@ -105,6 +114,7 @@ static inline unsigned long extio_translate(struct fwnode_handle *node,
 }
 #endif
 
+#if defined(PCI_IOBASE) && defined(CONFIG_INDIRECT_PIO)
 #if 0
 #define BUILD_EXTIO(bw, type)						\
 type in##bw(unsigned long addr)						\
@@ -210,5 +220,6 @@ void extio_outs##bw(unsigned long addr, const void *buffer, unsigned int count)	
 				addr - extio_ent->offset, buffer,	\
 				sizeof(type), count);			\
 }
+#endif
 
 #endif /* __LINUX_EXTIO_H */

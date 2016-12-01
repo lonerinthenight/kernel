@@ -44,7 +44,7 @@ struct hisilpc_dev {
 	spinlock_t cycle_lock;
 	void __iomem  *membase;
 	/*struct extio_node node_ent;*/
-	struct extio_range io_ent;
+	struct extio_range *io_ent;
 };
 
 
@@ -540,13 +540,13 @@ static int hisilpc_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct resource *iores;
-	struct extio_range *range;
 	struct hisilpc_dev *lpcdev;
 
 	dev_info(&pdev->dev, "probing hslpc...\n");
 
 	lpcdev = devm_kzalloc(&pdev->dev,
-				sizeof(struct hisilpc_dev), GFP_KERNEL);
+		sizeof(*lpcdev) + sizeof(struct extio_range),
+		GFP_KERNEL);
 	if (!lpcdev)
 		return -ENOMEM;
 
@@ -559,6 +559,8 @@ static int hisilpc_probe(struct platform_device *pdev)
 		return PTR_ERR(lpcdev->membase);
 	}
 
+	lpcdev->io_ent = (struct extio_range *)((u8 *)lpcdev +
+				sizeof(struct hisilpc_dev));
 	/*
 	 * For FDT mode, indirect IO registering must be done before
 	 * scanning children since the 'reg' property parsing depends on
@@ -581,10 +583,10 @@ static int hisilpc_probe(struct platform_device *pdev)
 	range->iowin.start = 0;
 	range->iowin.end = LEGACY_BUS_IO_SIZE - 1;
 #endif
-	range = &lpcdev->io_ent;
-	ret = register_extio_range(pdev->dev.fwnode, range);
+	ret = register_extio_range(pdev->dev.fwnode, lpcdev->io_ent);
 	if (ret) {
-		dev_err(&pdev->dev, "Allocate bus I/O FAIL(%d)\n", -ret);
+		dev_err(&pdev->dev, "Allocate bus I/O FAIL(%d)\n",
+				-ret);
 		return ret;
 	}
 
@@ -605,7 +607,7 @@ static int hisilpc_probe(struct platform_device *pdev)
 		}
 
 		/* request linux PIO ranges for children. probably is not needed*/
-		ret = device_for_each_child(&pdev->dev, &range->iowin,
+		ret = device_for_each_child(&pdev->dev, &lpcdev->io_ent->iowin,
 				hisilpc_child_map_sysio);
 		if (ret)
 			return ret;
@@ -621,11 +623,11 @@ static int hisilpc_probe(struct platform_device *pdev)
 		}
 	}
 
-	range->ops.devpara = lpcdev;
-	range->ops.pfin = hisilpc_comm_in;
-	range->ops.pfout = hisilpc_comm_out;
-	range->ops.pfins = hisilpc_comm_ins;
-	range->ops.pfouts = hisilpc_comm_outs;
+	lpcdev->io_ent->ops.devpara = lpcdev;
+	lpcdev->io_ent->ops.pfin = hisilpc_comm_in;
+	lpcdev->io_ent->ops.pfout = hisilpc_comm_out;
+	lpcdev->io_ent->ops.pfins = hisilpc_comm_ins;
+	lpcdev->io_ent->ops.pfouts = hisilpc_comm_outs;
 
 	platform_set_drvdata(pdev, lpcdev);
 
@@ -640,7 +642,7 @@ static const struct of_device_id hisilpc_of_match[] = {
 };
 
 static const struct acpi_device_id hisilpc_acpi_match[] = {
-	{"HISI0191", },
+	{"HISI0191",},
 	{},
 };
 
