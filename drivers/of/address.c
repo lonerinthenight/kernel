@@ -11,6 +11,7 @@
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/extio.h>
 
 /* Max address size we deal with */
 #define OF_MAX_ADDR_CELLS	4
@@ -481,10 +482,12 @@ static int of_empty_ranges_quirk(struct device_node *np)
 
 static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, __be32 *addr,
-			    int na, int ns, int pna, const char *rprop)
+			    int na, int ns, int pna, const char *rprop,
+			    struct device_node **host)
 {
 	const __be32 *ranges;
 	unsigned int rlen;
+	bool withIO = false;
 	int rone;
 	u64 offset = OF_BAD_ADDR;
 
@@ -507,8 +510,11 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 	ranges = of_get_property(parent, rprop, &rlen);
 	if (ranges == NULL && !of_empty_ranges_quirk(parent)) {
 		pr_debug("no ranges; cannot translate\n");
+		if (host)
+			*host = of_node_get(parent);
 		return 1;
 	}
+
 	if (ranges == NULL || rlen == 0) {
 		offset = of_read_number(addr, na);
 		memset(addr, 0, pna * 4);
@@ -525,9 +531,15 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 		offset = bus->map(addr, ranges, na, ns, pna);
 		if (offset != OF_BAD_ADDR)
 			break;
+		/* whether there are any IO 'ranges' */
+		if (bus->get_flags(ranges) && IORESOURCE_IO)
+			withIO = true;
 	}
 	if (offset == OF_BAD_ADDR) {
-		pr_debug("not found !\n");
+		if (!withIO && host)
+			*host = of_node_get(parent);
+		else
+			pr_debug("not found !\n");
 		return 1;
 	}
 	memcpy(addr, ranges + na, 4 * pna);
@@ -551,7 +563,8 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
  * that way, but this is traditionally the way IBM at least do things
  */
 static u64 __of_translate_address(struct device_node *dev,
-				  const __be32 *in_addr, const char *rprop)
+				  const __be32 *in_addr, const char *rprop,
+				  struct device_node **host)
 {
 	struct device_node *parent = NULL;
 	struct of_bus *bus, *pbus;
@@ -561,6 +574,8 @@ static u64 __of_translate_address(struct device_node *dev,
 
 	pr_debug("** translation for device %s **\n", of_node_full_name(dev));
 
+	if (host)
+		*host = NULL;
 	/* Increase refcount at current level */
 	of_node_get(dev);
 
@@ -609,8 +624,15 @@ static u64 __of_translate_address(struct device_node *dev,
 		    pbus->name, pna, pns, of_node_full_name(parent));
 
 		/* Apply bus translation */
-		if (of_translate_one(dev, bus, pbus, addr, na, ns, pna, rprop))
+		if (of_translate_one(dev, bus, pbus, addr, na, ns, pna,
+				rprop, host)) {
+			if (host && *host) {
+				pr_info("%s:: without IO 'ranges'!\n",
+					of_node_full_name(dev));
+				result = of_read_number(addr, na);
+			}
 			break;
+		}
 
 		/* Complete the move up one level */
 		na = pna;
@@ -628,13 +650,13 @@ static u64 __of_translate_address(struct device_node *dev,
 
 u64 of_translate_address(struct device_node *dev, const __be32 *in_addr)
 {
-	return __of_translate_address(dev, in_addr, "ranges");
+	return __of_translate_address(dev, in_addr, "ranges", NULL);
 }
 EXPORT_SYMBOL(of_translate_address);
 
 u64 of_translate_dma_address(struct device_node *dev, const __be32 *in_addr)
 {
-	return __of_translate_address(dev, in_addr, "dma-ranges");
+	return __of_translate_address(dev, in_addr, "dma-ranges", NULL);
 }
 EXPORT_SYMBOL(of_translate_dma_address);
 
@@ -676,29 +698,51 @@ const __be32 *of_get_address(struct device_node *dev, int index, u64 *size,
 }
 EXPORT_SYMBOL(of_get_address);
 
+
+u64 of_translate_ioport(struct device_node *dev, const __be32 *in_addr)
+{
+	u64 taddr;
+	unsigned long port;
+	struct device_node *host;
+
+	taddr = __of_translate_address(dev, in_addr, "ranges", &host);
+	if (host) {
+		port = extio_translate(&host->fwnode, taddr);
+		if (port == -1)
+			pr_info("%s:: no indirect IO device of (%s)\n",
+				of_node_full_name(dev),
+				of_node_full_name(host));
+		of_node_put(host);
+	} else {
+		/* memory mapped I/O range */
+		port = pci_address_to_pio(taddr);
+	}
+
+	if (port == (unsigned long)-1)
+		return OF_BAD_ADDR;
+
+	return port;
+}
+
 static int __of_address_to_resource(struct device_node *dev,
 		const __be32 *addrp, u64 size, unsigned int flags,
 		const char *name, struct resource *r)
 {
 	u64 taddr;
 
-	if ((flags & (IORESOURCE_IO | IORESOURCE_MEM)) == 0)
+	if (flags & IORESOURCE_MEM)
+		taddr = of_translate_address(dev, addrp);
+	else if (flags & IORESOURCE_IO)
+		taddr = of_translate_ioport(dev, addrp);
+	else
 		return -EINVAL;
-	taddr = of_translate_address(dev, addrp);
+
 	if (taddr == OF_BAD_ADDR)
 		return -EINVAL;
 	memset(r, 0, sizeof(struct resource));
-	if (flags & IORESOURCE_IO) {
-		unsigned long port;
-		port = pci_address_to_pio(taddr);
-		if (port == (unsigned long)-1)
-			return -EINVAL;
-		r->start = port;
-		r->end = port + size - 1;
-	} else {
-		r->start = taddr;
-		r->end = taddr + size - 1;
-	}
+
+	r->start = taddr;
+	r->end = taddr + size - 1;
 	r->flags = flags;
 	r->name = name ? name : dev->full_name;
 

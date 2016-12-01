@@ -29,6 +29,7 @@
 #include <linux/atomic.h>
 #include <linux/device.h>
 #include <linux/io.h>
+#include <linux/extio.h>
 #include <linux/resource_ext.h>
 #include <uapi/linux/pci.h>
 
@@ -1180,10 +1181,6 @@ int __must_check pci_bus_alloc_resource(struct pci_bus *bus,
 						  resource_size_t),
 			void *alignf_data);
 
-
-int pci_register_io_range(phys_addr_t addr, resource_size_t size);
-unsigned long pci_address_to_pio(phys_addr_t addr);
-phys_addr_t pci_pio_to_address(unsigned long pio);
 int pci_remap_iospace(const struct resource *res, phys_addr_t phys_addr);
 void pci_unmap_iospace(struct resource *res);
 
@@ -1577,9 +1574,6 @@ static inline struct resource *pci_find_resource(struct pci_dev *dev,
 static inline int pci_request_regions(struct pci_dev *dev, const char *res_name)
 { return -EIO; }
 static inline void pci_release_regions(struct pci_dev *dev) { }
-
-static inline unsigned long pci_address_to_pio(phys_addr_t addr) { return -1; }
-
 static inline void pci_block_cfg_access(struct pci_dev *dev) { }
 static inline int pci_block_cfg_access_in_atomic(struct pci_dev *dev)
 { return 0; }
