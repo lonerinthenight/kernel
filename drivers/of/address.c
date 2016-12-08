@@ -11,7 +11,7 @@
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/extio.h>
+/* #include <linux/extio.h> */
 
 /* Max address size we deal with */
 #define OF_MAX_ADDR_CELLS	4
@@ -532,7 +532,7 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 		if (offset != OF_BAD_ADDR)
 			break;
 		/* whether there are any IO 'ranges' */
-		if (bus->get_flags(ranges) && IORESOURCE_IO)
+		if (bus->get_flags(ranges) & IORESOURCE_IO)
 			withIO = true;
 	}
 	if (offset == OF_BAD_ADDR) {
@@ -629,7 +629,8 @@ static u64 __of_translate_address(struct device_node *dev,
 			if (host && *host) {
 				pr_info("%s:: without IO 'ranges'!\n",
 					of_node_full_name(dev));
-				result = of_read_number(addr, na);
+				/* the dev must be non-default bus */
+				result = of_read_number(addr + 1, na - 1);
 			}
 			break;
 		}
@@ -699,7 +700,7 @@ const __be32 *of_get_address(struct device_node *dev, int index, u64 *size,
 EXPORT_SYMBOL(of_get_address);
 
 
-u64 of_translate_ioport(struct device_node *dev, const __be32 *in_addr)
+static u64 of_translate_ioport(struct device_node *dev, const __be32 *in_addr)
 {
 	u64 taddr;
 	unsigned long port;
@@ -708,11 +709,11 @@ u64 of_translate_ioport(struct device_node *dev, const __be32 *in_addr)
 	taddr = __of_translate_address(dev, in_addr, "ranges", &host);
 	if (host) {
 		port = extio_translate(&host->fwnode, taddr);
+		of_node_put(host);
 		if (port == -1)
 			pr_info("%s:: no indirect IO device of (%s)\n",
 				of_node_full_name(dev),
 				of_node_full_name(host));
-		of_node_put(host);
 	} else {
 		/* memory mapped I/O range */
 		port = pci_address_to_pio(taddr);

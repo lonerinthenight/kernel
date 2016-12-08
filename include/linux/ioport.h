@@ -280,6 +280,9 @@ static inline bool resource_overlaps(struct resource *r1, struct resource *r2)
        return (r1->start <= r2->end && r1->end >= r2->start);
 }
 
+typedef int (*res_match_t)(struct resource *res, void *match_data);
+extern struct resource * lookup_match_res(struct resource *root,
+		bool sibling_only, void *arg, res_match_t match);
 
 #endif /* __ASSEMBLY__ */
 #endif	/* _LINUX_IOPORT_H */

@@ -14,6 +14,7 @@
 #include <asm/page.h> /* I/O is all done through memory accesses */
 #include <linux/string.h> /* for memset() and memcpy() */
 #include <linux/types.h>
+#include <linux/extio.h>
 
 #ifdef CONFIG_GENERIC_IOMAP
 #include <asm-generic/iomap.h>
@@ -359,7 +360,6 @@ static inline void writesq(volatile void __iomem *addr, const void *buffer,
 
 #ifndef inb
 #ifdef CONFIG_INDIRECT_PIO
-extern u8 extio_inb(unsigned long addr);
 #define inb extio_inb
 #else
 #define inb inb
@@ -372,7 +372,6 @@ static inline u8 inb(unsigned long addr)
 
 #ifndef inw
 #ifdef CONFIG_INDIRECT_PIO
-extern u16 extio_inw(unsigned long addr);
 #define inw extio_inw
 #else
 #define inw inw
@@ -385,7 +384,6 @@ static inline u16 inw(unsigned long addr)
 
 #ifndef inl
 #ifdef CONFIG_INDIRECT_PIO
-extern u32 extio_inl(unsigned long addr);
 #define inl extio_inl
 #else
 #define inl inl
@@ -398,7 +396,6 @@ static inline u32 inl(unsigned long addr)
 
 #ifndef outb
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outb(u8 value, unsigned long addr);
 #define outb extio_outb
 #else
 #define outb outb
@@ -411,7 +408,6 @@ static inline void outb(u8 value, unsigned long addr)
 
 #ifndef outw
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outw(u16 value, unsigned long addr);
 #define outw extio_outw
 #else
 #define outw outw
@@ -424,7 +420,6 @@ static inline void outw(u16 value, unsigned long addr)
 
 #ifndef outl
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outl(u32 value, unsigned long addr);
 #define outl extio_outl
 #else
 #define outl outl
@@ -490,7 +485,6 @@ static inline void outl_p(u32 value, unsigned long addr)
 
 #ifndef insb
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_insb(unsigned long addr, void *buffer, unsigned int count);
 #define insb extio_insb
 #else
 #define insb insb
@@ -503,7 +497,6 @@ static inline void insb(unsigned long addr, void *buffer, unsigned int count)
 
 #ifndef insw
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_insw(unsigned long addr, void *buffer, unsigned int count);
 #define insw extio_insw
 #else
 #define insw insw
@@ -516,7 +509,6 @@ static inline void insw(unsigned long addr, void *buffer, unsigned int count)
 
 #ifndef insl
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_insl(unsigned long addr, void *buffer, unsigned int count);
 #define insl extio_insl
 #else
 #define insl insl
@@ -529,7 +521,6 @@ static inline void insl(unsigned long addr, void *buffer, unsigned int count)
 
 #ifndef outsb
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outsb(unsigned long addr, const void *buffer, unsigned int count);
 #define outsb extio_outsb
 #else
 #define outsb outsb
@@ -543,7 +534,6 @@ static inline void outsb(unsigned long addr, const void *buffer,
 
 #ifndef outsw
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outsw(unsigned long addr, const void *buffer, unsigned int count);
 #define outsw extio_outsw
 #else
 #define outsw outsw
@@ -557,7 +547,6 @@ static inline void outsw(unsigned long addr, const void *buffer,
 
 #ifndef outsl
 #ifdef CONFIG_INDIRECT_PIO
-extern void extio_outsl(unsigned long addr, const void *buffer, unsigned int count);
 #define outsl extio_outsl
 #else
 #define outsl outsl

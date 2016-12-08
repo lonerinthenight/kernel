@@ -19,7 +19,7 @@
 #include <linux/acpi.h>
 #include <linux/console.h>
 #include <linux/delay.h>
-#include <linux/extio.h>
+/* #include <linux/extio.h> */
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -43,7 +43,7 @@ struct lpc_cycle_para {
 struct hisilpc_dev {
 	spinlock_t cycle_lock;
 	void __iomem  *membase;
-	/*struct extio_node node_ent;*/
+
 	struct extio_range *io_ent;
 };
 
@@ -110,11 +110,11 @@ static inline int wait_lpc_idle(unsigned char *mbase,
 	return -ETIME;
 }
 
-/**
+/*
  * hisilpc_target_in - trigger a series of lpc cycles to read required data
- *		  from target periperal.
+ *		  from target peripheral.
  * @pdev: pointer to hisi lpc device
- * @para: some paramerters used to control the lpc I/O operations
+ * @para: some parameters used to control the lpc I/O operations
  * @ptaddr: the lpc I/O target port address
  * @buf: where the read back data is stored
  * @opcnt: how many I/O operations required in this calling
@@ -177,11 +177,11 @@ static int hisilpc_target_in(struct hisilpc_dev *lpcdev,
 	return ret;
 }
 
-/**
+/*
  * hisilpc_target_out - trigger a series of lpc cycles to write required data
- *		  to target periperal.
+ *		  to target peripheral.
  * @pdev: pointer to hisi lpc device
- * @para: some paramerters used to control the lpc I/O operations
+ * @para: some parameters used to control the lpc I/O operations
  * @ptaddr: the lpc I/O target port address
  * @buf: where the data to be written is stored
  * @opcnt: how many I/O operations required
@@ -242,7 +242,7 @@ static int hisilpc_target_out(struct hisilpc_dev *lpcdev,
 	return ret;
 }
 
-/**
+/*
  * hisilpc_comm_in - read/input the data from the I/O peripheral through LPC.
  * @devobj: pointer to the device information relevant to LPC controller.
  * @ptaddr: the target I/O port address.
@@ -280,7 +280,7 @@ static u64 hisilpc_comm_in(void *devobj, unsigned long ptaddr, size_t dlen)
 	return le32_to_cpu(rd_data);
 }
 
-/**
+/*
  * hisilpc_comm_out - write/output the data whose maximal length is four bytes to
  *		the I/O peripheral through LPC.
  * @devobj: pointer to the device information relevant to LPC controller.
@@ -315,7 +315,7 @@ static void hisilpc_comm_out(void *devobj, unsigned long ptaddr,
 	hisilpc_target_out(lpcdev, &iopara, ptaddr, newbuf, dlen);
 }
 
-/**
+/*
  * hisilpc_comm_ins - read/input the data in buffer to the I/O peripheral
  *		    through LPC, it corresponds to ins(b,w,l)
  * @devobj: pointer to the device information relevant to LPC controller.
@@ -365,7 +365,7 @@ static u64 hisilpc_comm_ins(void *devobj, unsigned long ptaddr,
 	return ret;
 }
 
-/**
+/*
  * hisilpc_comm_outs - write/output the data in buffer to the I/O peripheral
  *		    through LPC, it corresponds to outs(b,w,l)
  * @devobj: pointer to the device information relevant to LPC controller.
@@ -413,7 +413,16 @@ static void hisilpc_comm_outs(void *devobj, unsigned long ptaddr,
 	} while (cntleft);
 }
 
-int hisilpc_child_map_sysio(struct device *child, void *data)
+/*
+ * hisilpc_child_iorequest - request the linux IO resource of child from
+ *		LPC bus IO window.
+ *
+ * @child: pointer to the child device.
+ * @data: the IO window of LPC bus.
+ *
+ * return 0 for success, negative value for failure.
+ */
+static int hisilpc_child_iorequest(struct device *child, void *data)
 {
 	int ret;
 	struct resource *res, *root;
@@ -439,7 +448,7 @@ int hisilpc_child_map_sysio(struct device *child, void *data)
 	return ret;
 }
 
-/**
+/*
  * hisilpc_probe - the probe callback function for hisi lpc device,
  *		will finish all the intialization.
  * @pdev: the platform device corresponding to hisi lpc
@@ -453,7 +462,7 @@ static int hisilpc_probe(struct platform_device *pdev)
 	struct resource *iores;
 	struct hisilpc_dev *lpcdev;
 
-	dev_info(&pdev->dev, "probing hslpc...\n");
+	dev_info(&pdev->dev, "probing hisilpc...\n");
 
 	/* For ACPI mode, the alloc is redundant */
 	lpcdev = devm_kzalloc(&pdev->dev,
@@ -471,7 +480,21 @@ static int hisilpc_probe(struct platform_device *pdev)
 		return PTR_ERR(lpcdev->membase);
 	}
 
-	if (!has_acpi_companion(&pdev->dev)) {
+	if (has_acpi_companion(&pdev->dev)) {
+		/*
+		 * For ACPI children, a special handler is added for our LPC
+		 * controller to convert LPC I/O to linux PIO when the corresponding
+		 * child is scanning. No more actions will be perfromed here.
+		 */
+		struct acpi_device *devnode;
+
+		devnode = to_acpi_device_node(pdev->dev.fwnode);
+		lpcdev->io_ent = devnode->driver_data;
+		if (!lpcdev->io_ent) {
+			dev_err(&pdev->dev, "no driver data in ACPI node!\n");
+			return -EFAULT;
+		}
+	} else {
 		lpcdev->io_ent = (struct extio_range *)((u8 *)lpcdev +
 				sizeof(struct hisilpc_dev));
 		/*
@@ -487,7 +510,8 @@ static int hisilpc_probe(struct platform_device *pdev)
 			return ret;
 		}
 		/* create the bus IO window. */
-		ret = register_extio_range(pdev->dev.fwnode, lpcdev->io_ent);
+		ret = register_bus_extio_range(pdev->dev.fwnode,
+				lpcdev->io_ent);
 		if (ret) {
 			dev_err(&pdev->dev, "Allocate bus I/O FAIL(%d)\n",
 					-ret);
@@ -505,26 +529,12 @@ static int hisilpc_probe(struct platform_device *pdev)
 			return ret;
 		}
 
-		/* request linux PIO ranges for children. probably is not needed*/
+		/* request linux PIO ranges for children. probably is not needed. */
 		ret = device_for_each_child(&pdev->dev, &lpcdev->io_ent->iowin,
-				hisilpc_child_map_sysio);
+				hisilpc_child_iorequest);
 		if (ret)
 			return ret;
-	} else {
-		/*
-		 * For ACPI children, a special handler is added for our LPC
-		 * controller to convert LPC I/O to linux PIO when the corresponding
-		 * child is scanning. No more actions will be perfromed here.
-		 */
-		struct acpi_device *devnode;
-
-		devnode = to_acpi_device_node(pdev->dev.fwnode);
-		lpcdev->io_ent = devnode->driver_data;
-		if (!lpcdev->io_ent) {
-			dev_err(&pdev->dev, "no driver data in ACPI node!\n");
-			return -EFAULT;
-		}
-	}
+	} 
 
 	lpcdev->io_ent->ops.devpara = lpcdev;
 	lpcdev->io_ent->ops.pfin = hisilpc_comm_in;

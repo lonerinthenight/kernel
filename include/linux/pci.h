@@ -29,7 +29,7 @@
 #include <linux/atomic.h>
 #include <linux/device.h>
 #include <linux/io.h>
-#include <linux/extio.h>
+/* #include <linux/extio.h> */
 #include <linux/resource_ext.h>
 #include <uapi/linux/pci.h>
 

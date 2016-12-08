@@ -1611,6 +1611,22 @@ void resource_list_free(struct list_head *head)
 }
 EXPORT_SYMBOL(resource_list_free);
 
+struct resource * lookup_match_res(struct resource *root,
+		bool sibling_only, void *arg, res_match_t match)
+{
+	struct resource *res;
+
+	read_lock(&resource_lock);
+	for (res = root->child; res; res = next_resource(res, sibling_only)) {
+		if (match(res, arg))
+			break;
+	}
+	read_unlock(&resource_lock);
+
+	return res;
+}
+EXPORT_SYMBOL(lookup_match_res);
+
 static int __init strict_iomem(char *str)
 {
 	if (strstr(str, "relaxed"))
