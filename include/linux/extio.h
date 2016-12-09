@@ -29,14 +29,17 @@
  */
 #define IO_RANGE_IOEXT (resource_size_t)(-1ull)
 
-/* the total legacy IO size is 16K. */
-#define LEGACY_IO_TSIZE	0x4000
-/* the maximal IO size for each leagcy bus. 12bits */
-#define LEGACY_BUS_IO_SIZE	0x800
+/* the total legacy IO size is 8K. */
+#define LEGACY_IO_TSIZE	0x2000
+/*
+ * The maximal IO size for each leagcy bus.
+ * As all the children IO ranges are consecutive in indirectIO bus virtual IO
+ * window, 0x400 should be sufficient for all peripherals under one bus.
+ * Which means that maximum 8 indirectIO buses are supported.
+ */
+#define LEGACY_BUS_IO_SIZE	0x400
 
 struct extio_ops {
-	resource_size_t offset; /* linux pio - dev start io */
-
 	u64 (*pfin)(void *devobj, unsigned long ptaddr,	size_t dlen);
 	void (*pfout)(void *devobj, unsigned long ptaddr, u32 outval,
 					size_t dlen);
@@ -48,32 +51,40 @@ struct extio_ops {
 	void *devpara;
 };
 
-#if 0
-struct extio_dev_win {
+/* only used when the devices are scanning */
+struct extio_alloc_seg {
 	struct list_head node;
-	resource_size_t local_start;
-	resource_size_t local_end;
+	resource_size_t start; /* pio */
+	resource_size_t end;
+	resource_size_t offset;
+	struct extio_bus_res *bus_res;
+};
+#define to_extio_alloc(x) container_of((x), struct extio_alloc_seg, node)
 
-	/*struct resource *res;*/
+/* will be linked into resource tree after the device is created. */
+struct extio_dev_res {
+	struct resource res;
 	resource_size_t offset; /* linux pio - dev start io */
-	/*resource_size_t iostart;*/
 
 	struct extio_ops *devops;
+	/* point to the corresponding child for freeing resource */
+	struct device *dev;
+	struct extio_alloc_seg *pseg;
 };
-#endif
+#define to_extio_dev_range(x) container_of((x), struct extio_dev_res, res)
 
-struct extio_range {
+struct extio_bus_res {
 	struct fwnode_handle *fwnode; /* search key */
 
 	struct resource iowin;
 	struct extio_ops ops;
-
-	/*struct extio_dev_win *child_win;*/
+	/* list of linux pio segments allocated */
+	spinlock_t child_lock;	
+	struct list_head child_head;
 };
+#define to_extio_range(x) container_of((x), struct extio_bus_res, iowin)
 
-#define to_extio_range(x) container_of((x), struct extio_range, iowin)
-
-struct extio_windows {
+struct extio_root_res {
 	void *pio_node;
 	struct resource root_res;
 };
@@ -92,7 +103,7 @@ static inline unsigned long pci_address_to_pio(phys_addr_t addr) { return -1; }
 
 #if defined(PCI_IOBASE) && defined(CONFIG_INDIRECT_PIO)
 extern int register_bus_extio_range(struct fwnode_handle *fwnode,
-			struct extio_range *range);
+			struct extio_bus_res *range);
 extern unsigned long extio_translate(struct fwnode_handle *node,
 		unsigned long dev_io);
 
@@ -113,12 +124,12 @@ extern void extio_outsl(unsigned long addr, const void *buffer,
 		unsigned int count);
 #else
 static inline int register_bus_extio_range(struct fwnode_handle *fwnode,
-			struct extio_range *range)
+			struct extio_bus_res *range)
 {
 	return -1;
 }
 static inline unsigned long extio_translate(struct fwnode_handle *node,
-		unsigned long dev_io)
+		resource_size_t dev_io, resource_size_t size)
 {
 	return -1;
 }

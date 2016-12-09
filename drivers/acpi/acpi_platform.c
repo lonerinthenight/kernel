@@ -88,25 +88,9 @@ struct platform_device *acpi_create_platform_device(struct acpi_device *adev,
 			return ERR_PTR(-ENOMEM);
 		}
 		count = 0;
-		list_for_each_entry(rentry, &resource_list, node) {
-			/* for leagacy IO child, perform IO translation */
-			if (rentry->res->flags & IORESOURCE_IO &&
-				acpi_is_legacyio_device(adev->parent)) {
-				unsigned long sys_start;
-				
-				sys_start = extio_translate(&adev->parent->fwnode, rentry->res->start);
-				if (sys_start == -1) {
-					dev_err(&adev->dev, "FAIL:convert resource(%pR) to system IO\n",
-						rentry->res);
-					return ERR_PTR(-ENXIO);
-				}
-				rentry->res->start = sys_start;
-				rentry->res->end = sys_start +
-					resource_size(rentry->res) - 1;
-			}
+		list_for_each_entry(rentry, &resource_list, node)
 			acpi_platform_fill_resource(adev, rentry->res,
 						    &resources[count++]);
-		}
 
 		acpi_dev_free_resource_list(&resource_list);
 	}

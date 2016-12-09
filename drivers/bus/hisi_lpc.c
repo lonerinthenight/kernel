@@ -44,7 +44,7 @@ struct hisilpc_dev {
 	spinlock_t cycle_lock;
 	void __iomem  *membase;
 
-	struct extio_range *io_ent;
+	struct extio_bus_res *io_ent;
 };
 
 
@@ -413,6 +413,20 @@ static void hisilpc_comm_outs(void *devobj, unsigned long ptaddr,
 	} while (cntleft);
 }
 
+
+static int hisilpc_child_notifier(struct notifier_block *nb,
+				   unsigned long action, void *data)
+{
+
+	return 0;
+}
+
+
+static struct notifier_block hisilpc_dev_nb = {
+	.notifier_call = hisilpc_child_notifier,
+};
+
+
 /*
  * hisilpc_child_iorequest - request the linux IO resource of child from
  *		LPC bus IO window.
@@ -422,31 +436,140 @@ static void hisilpc_comm_outs(void *devobj, unsigned long ptaddr,
  *
  * return 0 for success, negative value for failure.
  */
-static int hisilpc_child_iorequest(struct device *child, void *data)
+static int hisilpc_child_io_insert(struct device *child, void *data)
 {
+	int i;
 	int ret;
-	struct resource *res, *root;
-	struct platform_device *pltdev;
+	struct resource *root;
+	struct platform_device *pdev;
+	struct extio_dev_res *dev_res;
+	struct extio_alloc_seg *segnode;
 
 	if (!child || !child->parent)
 		return -EINVAL;
 
-	pltdev = to_platform_device(child);
-	/* Only one resource for hisi lpc */
-	res = platform_get_resource(pltdev, IORESOURCE_IO, 0);
-	if (!res) {
-		dev_err(child, "No any IO!\n");
-		return -ENXIO;
+	pdev = to_platform_device(child);
+	/* find the IO resource from device */
+	for (i = 0; i < pdev->num_resources; i++) {
+		if (&pdev->resource[i].flags & IORESOURCE_IO)
+			break;
 	}
+	if (i == pdev->num_resources)
+		return -ENXIO;
+	root = pdev->resource + i;
+
+	segnode = extio_find_registered_io(child->parent->fwnode, root->start,
+			resource_size(root));
+	if (!segnode)
+		return -ENXIO;
+
+	dev_res = kzalloc(child, sizeof(*dev_res), GFP_KERNEL);
+	if (!dev_res)
+		return -ENOMEM;
+
+	dev_res->res = *root;
+	dev_res->offset = segnode->offset;
+	dev_res->devops = &segnode->bus_res->ops;
+	dev_res->dev = child;
+	dev_res->pseg = segnode;
 
 	root = (struct resource *)data;
-	ret = devm_request_resource(child, root, res);
+	ret = insert_resource(child, root, &dev_res->res);
 	if (ret)
 		dev_err(child, "request IO resource(%pR) FAIL(%d)!\n",
-				res, -ret);
+				&dev_res->res, -ret);
+
+	/* register a callback to release this resource */
+	ret = bus_register_notifier(pdev->dev.bus, &hisilpc_dev_nb);
+	if (ret)
+		dev_err(child, "Failed to register hisilpc notifier in'%s'\n");
 
 	return ret;
 }
+
+
+struct platform_device *acpi_extio_reg_platform_dev(struct acpi_device *adev,
+				struct property_entry *properties)
+{
+	struct platform_device *pdev = NULL;
+	struct platform_device_info pdevinfo;
+	struct resource_entry *rentry;
+	struct list_head resource_list;
+	struct resource *resources = NULL;
+	int count;
+
+	/* If the ACPI node already has a physical device attached, skip it. */
+	if (adev->physical_node_count)
+		return NULL;
+
+	INIT_LIST_HEAD(&resource_list);
+	count = acpi_dev_get_resources(adev, &resource_list, NULL, NULL);
+	if (count < 0) {
+		return NULL;
+	} else if (count > 0) {
+		resources = kzalloc(count * sizeof(struct resource),
+				    GFP_KERNEL);
+		if (!resources) {
+			dev_err(&adev->dev, "No memory for resources\n");
+			acpi_dev_free_resource_list(&resource_list);
+			return ERR_PTR(-ENOMEM);
+		}
+		count = 0;
+		list_for_each_entry(rentry, &resource_list, node) {
+			if (rentry->res->flags & IORESOURCE_IO) {
+				unsigned long sys_start;
+
+				sys_start = extio_translate(&adev->parent->fwnode,
+						rentry->res->start,
+						resource_size(rentry->res));
+				if (sys_start == -1) {
+					dev_err(&adev->dev, "FAIL:convert resource(%pR) to system IO\n",
+					        rentry->res);
+					return ERR_PTR(-ENXIO);
+				}
+				rentry->res->start = sys_start;
+				rentry->res->end = sys_start +
+					resource_size(rentry->res) - 1;
+			}
+			acpi_platform_fill_resource(adev, rentry->res,
+				&resources[count++]);
+		}
+		acpi_dev_free_resource_list(&resource_list);
+	}
+
+	memset(&pdevinfo, 0, sizeof(pdevinfo));
+	/*
+	 * If the ACPI node has a parent and that parent has a physical device
+	 * attached to it, that physical device should be the parent of the
+	 * platform device we are about to create.
+	 */
+	pdevinfo.parent = adev->parent ?
+		acpi_get_first_physical_node(adev->parent) : NULL;
+	pdevinfo.name = dev_name(&adev->dev);
+	pdevinfo.id = -1;
+	pdevinfo.res = resources;
+	pdevinfo.num_res = count;
+	pdevinfo.fwnode = acpi_fwnode_handle(adev);
+	pdevinfo.properties = properties;
+
+	if (acpi_dma_supported(adev))
+		pdevinfo.dma_mask = DMA_BIT_MASK(32);
+	else
+		pdevinfo.dma_mask = 0;
+
+	pdev = platform_device_register_full(&pdevinfo);
+	if (IS_ERR(pdev))
+		dev_err(&adev->dev, "platform device creation failed: %ld\n",
+			PTR_ERR(pdev));
+	else
+		dev_dbg(&adev->dev, "created platform device %s\n",
+			dev_name(&pdev->dev));
+
+	kfree(resources);
+	return pdev;
+}
+
+
 
 /*
  * hisilpc_probe - the probe callback function for hisi lpc device,
@@ -466,7 +589,7 @@ static int hisilpc_probe(struct platform_device *pdev)
 
 	/* For ACPI mode, the alloc is redundant */
 	lpcdev = devm_kzalloc(&pdev->dev,
-		sizeof(*lpcdev) + sizeof(struct extio_range),
+		sizeof(*lpcdev) + sizeof(struct extio_bus_res),
 		GFP_KERNEL);
 	if (!lpcdev)
 		return -ENOMEM;
@@ -480,47 +603,52 @@ static int hisilpc_probe(struct platform_device *pdev)
 		return PTR_ERR(lpcdev->membase);
 	}
 
-	if (has_acpi_companion(&pdev->dev)) {
-		/*
-		 * For ACPI children, a special handler is added for our LPC
-		 * controller to convert LPC I/O to linux PIO when the corresponding
-		 * child is scanning. No more actions will be perfromed here.
-		 */
-		struct acpi_device *devnode;
+	lpcdev->io_ent = (struct extio_bus_res *)((u8 *)lpcdev +
+			sizeof(struct hisilpc_dev));
+	/*
+	 * During the bus/device scanning, only LPC bus will be created.
+	 * But as indirectIO LPC bus is without 'ranges' or IO window, will
+	 * not request to register any linux virtual IO. So the indirectIO
+	 * root window can be registered here.
+	 */
+	ret = pci_register_io_range(IO_RANGE_IOEXT, LEGACY_IO_TSIZE);
+	if (ret) {
+		dev_err(&pdev->dev, "register whole legacyIO FAIL!\n");
+		return ret;
+	}
+	/* register the bus IO window. */
+	spin_lock_init(&lpcdev->io_ent->child_lock);
+	INIT_LIST_HEAD(&lpcdev->io_ent->child_head);
+	ret = register_bus_extio_range(pdev->dev.fwnode,
+			lpcdev->io_ent);
+	if (ret) {
+		dev_err(&pdev->dev, "Allocate bus I/O FAIL(%d)\n",
+				-ret);
+		return ret;
+	}
 
-		devnode = to_acpi_device_node(pdev->dev.fwnode);
-		lpcdev->io_ent = devnode->driver_data;
-		if (!lpcdev->io_ent) {
-			dev_err(&pdev->dev, "no driver data in ACPI node!\n");
-			return -EFAULT;
+	/*
+	 * For ACPI, all the children under indirectIO bus are delayed
+	 * the scanning during the early booting. Start here...
+	 */
+	if (has_acpi_companion(&pdev->dev)) {
+		struct acpi_device *root, *child;
+
+		root = to_acpi_device_node(pdev->dev.fwnode);
+		if (!root)
+			return -ENODEV;
+		list_for_each_entry(child, &root->children, node) {
+			struct platform_device *tmpdev;
+
+			tmpdev = acpi_extio_reg_platform_dev(child, NULL);
+			if (!tmpdev)
+				return -ENODEV;
 		}
 	} else {
-		lpcdev->io_ent = (struct extio_range *)((u8 *)lpcdev +
-				sizeof(struct hisilpc_dev));
-		/*
-		 * For FDT mode, indirect IO registering must be done before
-		 * scanning children since the 'reg' property parsing depends on
-		 * this bus node in the extio list. For ACPI mode, the bus scanning
-		 * doesn't depends on this node, but the linux PIO allocation for
-		 * children need it.
-		 */
-		ret = pci_register_io_range(IO_RANGE_IOEXT, LEGACY_IO_TSIZE);
-		if (ret) {
-			dev_err(&pdev->dev, "register whole legacyIO FAIL!\n");
-			return ret;
-		}
-		/* create the bus IO window. */
-		ret = register_bus_extio_range(pdev->dev.fwnode,
-				lpcdev->io_ent);
-		if (ret) {
-			dev_err(&pdev->dev, "Allocate bus I/O FAIL(%d)\n",
-					-ret);
-			return ret;
-		}
-		/*
-		 * For OF children, the scanning hasn't started during the platform
-		 * bus scanning. Here will start the scanning remained.
-		 */
+	/*
+	 * For OF children, the scanning hasn't started during the platform
+	 * bus scanning. Here will start the scanning.
+	 */
 		ret = of_platform_populate(pdev->dev.of_node, NULL, NULL,
 				&pdev->dev);
 		if (ret) {
@@ -528,13 +656,14 @@ static int hisilpc_probe(struct platform_device *pdev)
 				-ret);
 			return ret;
 		}
+	}
 
-		/* request linux PIO ranges for children. probably is not needed. */
-		ret = device_for_each_child(&pdev->dev, &lpcdev->io_ent->iowin,
-				hisilpc_child_iorequest);
-		if (ret)
-			return ret;
-	} 
+	/* must insert the child indirectIO resource to the tree */
+	ret = device_for_each_child(&pdev->dev, &lpcdev->io_ent->iowin,
+			hisilpc_child_io_insert);
+	if (ret)
+		return ret;
+
 
 	lpcdev->io_ent->ops.devpara = lpcdev;
 	lpcdev->io_ent->ops.pfin = hisilpc_comm_in;

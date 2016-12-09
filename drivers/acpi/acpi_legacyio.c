@@ -30,7 +30,7 @@ static int acpi_legacyio_attach(struct acpi_device *adev,
 				const struct acpi_device_id *id)
 {
 	int ret;
-	struct extio_range *range;
+	struct extio_bus_res *range;
 	struct platform_device *pdev;
 
 	/* create bus device as platform device */
@@ -47,7 +47,7 @@ static int acpi_legacyio_attach(struct acpi_device *adev,
 		return ret;
 	}
 	/* create the bus IO window. */
-	range = devm_kzalloc(&pdev->dev, sizeof(struct extio_range),
+	range = devm_kzalloc(&pdev->dev, sizeof(struct extio_bus_res),
 			GFP_KERNEL);
 	if (!range)
 		return -ENOMEM;

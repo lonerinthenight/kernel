@@ -31,16 +31,6 @@ void acpi_processor_init(void);
 void acpi_platform_init(void);
 void acpi_pnp_init(void);
 void acpi_int340x_thermal_init(void);
-#ifdef CONFIG_INDIRECT_PIO
-void acpi_legacyio_scan_init(void);
-bool acpi_is_legacyio_device(struct acpi_device *adev);
-#else
-static inline void acpi_legacyio_scan_init(void) {}
-static inline bool acpi_is_legacyio_device(struct acpi_device *adev)
-{
-	return false;
-}
-#endif
 
 #ifdef CONFIG_ARM_AMBA
 void acpi_amba_init(void);

@@ -38,7 +38,7 @@ static DEFINE_SPINLOCK(io_range_lock);
  * specially for legacy IO. Once this linux PIO range is allocated, will
  * not be released till system reboots.
  */
-static struct extio_windows legacy_iospace;
+static struct extio_root_res legacy_iospace;
 #endif
 
 /*
@@ -184,7 +184,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 
 #define LEGACY_IO_DEFAULT_ALIGN	0x01
 
-struct resource *extio_res_head;
+static struct resource *extio_res_head;
 
 /*
  * extio_is_contained -- callback functon which can find the matched
@@ -205,29 +205,29 @@ static int extio_is_contained(struct resource *res, void *match_data)
  *		which corresponds to the input linux virtual PIO.
  *		This function should be called when I/O accessors trigger.
  */
-static struct extio_range *extio_get_ops(struct resource *root,
+static struct extio_ops *extio_get_ops(struct resource *root,
 			unsigned long pio)
 {
+	int deepth = 0;
 	struct resource *res;
-	struct extio_range *range = NULL;
+	struct extio_dev_res *range = NULL;
 
-	do {
+	for (; deepth < 2; deepth++) {
 		res = lookup_match_res(root, true, &pio, extio_is_contained);
 		if (!res)
 			return NULL;
-		else
-			range = range ? : to_extio_range(res);
 		/* deep into the downstream window */
 		root = res;
-	} while (!(root->flags & IORESOURCE_BUSY));
+	}
 
-	return &range->ops;
+	range = to_extio_dev_range(res);
+	return range->devops;
 }
 
 static int extio_is_registered_bus(struct resource *res, void *match_data)
 {
 	struct fwnode_handle *fwnode = match_data;
-	struct extio_range *range;
+	struct extio_bus_res *range;
 
 	if (!res || (!is_of_node(fwnode) && !is_acpi_node(fwnode)))
 		return -EINVAL;
@@ -256,7 +256,7 @@ static struct extio_range *extio_get_bus_range(struct resource *root,
  *			root IO window.
  */
 int register_bus_extio_range(struct fwnode_handle *fwnode,
-			struct extio_range *range)
+			struct extio_bus_res *range)
 {
 	int ret;
 
@@ -287,11 +287,122 @@ int register_bus_extio_range(struct fwnode_handle *fwnode,
 	return ret;
 }
 
-unsigned long extio_translate(struct fwnode_handle *node,
-		unsigned long dev_io)
+
+static inline bool extio_range_contains(struct extio_alloc_seg *r1,
+		resource_size_t start, resource_size_t end)
 {
+	return r1->start <= start && r1->end >= end;
+}
+
+static inline bool extio_partial_overlap(struct extio_alloc_seg *r1,
+		resource_size_t start, resource_size_t end)
+{
+	/*
+	 * The overlap bus ranges are invalid. It should be called after
+	 * extio_range_contains().
+	 */
+	return !(start > r1->end || end < r1->start);
+}
+
+#define IOREG_IS_REGISTERED	0x01
+#define IOREG_IS_NEW		0x02
+#define IOREG_IS_PARTIAL	0x03
+
+
+static int extio_register_io(struct extio_bus_res *range,
+		resource_size_t dev_io, resource_size_t size,
+		struct extio_alloc_seg **seg)
+{
+	int ret;
+	int find_ret;
+	resource_size_t dev_end;
+	struct list_head *ins_point;
+	struct extio_alloc_seg *entry;
+	struct extio_alloc_seg idleseg;
+
+	if (!range || !size || !seg)
+		return -EINVAL;
+
+	dev_end = dev_io + size - 1;
+	idleseg.start = range->iowin.start;
+	ins_point = &range->child_head;
+	ret = 0;
+
+	spin_lock(&range->child_lock);
+	if (list_empty(&range->child_head)) {
+		idleseg.end = idleseg.start + size - 1;
+		find_ret = IOREG_IS_NEW;
+	} else {
+		resource_size_t pio_start;
+		resource_size_t pio_end;
+
+		/* There is no margin before first entry. */
+		list_for_each_entry(entry, &range->child_head, node) {
+			idleseg.end = (idleseg.start >= entry->start) ? 
+				idleseg.start : entry->start - 1;
+			pio_start = dev_io + entry->offset;
+			pio_end = dev_end + entry->offset;
+			/* found the entry which contain the input range */
+			if (extio_range_contains(entry, pio_start, pio_end)) {
+				find_ret = IOREG_IS_REGISTERED;
+				*seg = entry;
+				goto end_find;
+			}
+			if (extio_partial_overlap(entry, pio_start, pio_end)) {
+				ret = -EFAULT;
+				goto end_find;
+			}
+			/* check wheter the margin is big enough */			
+			if (size <= idleseg.end - idleseg.start + 1) {
+				find_ret = IOREG_IS_NEW;
+				ins_point = &entry->node;
+				break;
+			}
+			idleseg.start = entry->end + 1;
+		}
+		/* 
+		 * can't find the right segment, update the idlesge.end to the
+		 * end pio of range window.
+		 */
+		if (&entry->node == &range->child_head) {
+			idleseg.end = range->iowin.end;
+			/* recheck if idleseg is big enough */
+			if (size <= idleseg.end - idleseg.start + 1)
+				find_ret = IOREG_IS_NEW;
+		}
+		if (find_ret = IOREG_IS_NEW) {
+			idleseg.offset = idleseg.start - dev_io;
+			/* register a new node to the list */
+			entry = kzalloc(sizeof(*entry), GFP_ATOMIC);
+			if (!entry) {
+				ret = -ENOMEM;
+				goto end_find;
+			}
+			*entry = idleseg;
+			list_add_tail(&entry->node, ins_point);
+			entry->bus_res = range;
+			*seg = entry;
+		} else {
+		/* can not allocate linux virtual PIO for this request */
+			pr_warn("fail to translate busIO[%lu - %lu]\n",
+				(unsigned long)dev_io, (unsigned long)size);
+			ret  = -ENXIO;
+		}
+	}
+
+end_find:
+	spin_unlock(&range->child_lock);
+
+	return ret;
+}
+
+unsigned long extio_translate(struct fwnode_handle *node,
+		resource_size_t dev_io, resource_size_t size)
+{
+	int ret;
 	struct resource *res;
-	struct extio_range *range;
+	struct extio_alloc_seg *segnode;
+	struct extio_bus_res *range;
 
 	if (!node || dev_io >= LEGACY_BUS_IO_SIZE) {
 		pr_err("extio tanslate:: invalid parameters!\n");
@@ -305,9 +416,69 @@ unsigned long extio_translate(struct fwnode_handle *node,
 
 	range = to_extio_range(res);
 
-	/* suppose lagacy device IO always starts from ZERO. */
-	return range->ops.offset + dev_io;
+	ret = extio_register_io(range, dev_io, size, &segnode);
+	if (ret < 0)
+		return -1;
+
+	return dev_io + segnode->offset;
 }
+
+static struct extio_alloc_seg *extio_search_ioseg(struct extio_bus_res *range,
+		resource_size_t iostart, resource_size_t size)
+{
+	int ret;
+	resource_size_t io_end;
+	struct extio_alloc_seg *entry;
+
+	if (!range || !size)
+		return -EINVAL;
+
+	io_end = iostart + size - 1;
+
+	spin_lock(&range->child_lock);
+
+	/* There is no margin before first entry. */
+	list_for_each_entry(entry, &range->child_head, node) {
+		/* found the entry which contain the input range */
+		if (extio_range_contains(entry, iostart, io_end))
+			goto end_find;
+
+		if (extio_partial_overlap(entry, iostart, io_end)) {
+			entry = NULL;
+			goto end_find;
+		}
+	}
+	if (&entry->node == &range->child_head)
+		entry = NULL;
+
+end_find:
+	spin_unlock(&range->child_lock);
+
+	return entry;
+}
+
+
+struct extio_alloc_seg *extio_find_registered_io(struct fwnode_handle *node,
+		resource_size_t iostart, resource_size_t size)
+{
+	int ret;
+	struct resource *res;
+	struct extio_bus_res *range;
+
+	if (!node) {
+		pr_err("extio tanslate:: invalid parameters!\n");
+		return -1;
+	}
+
+	res = lookup_match_res(extio_res_head, true, node,
+		extio_is_registered_bus);
+	if (!res)
+		return -1;
+	range = to_extio_range(res);
+
+	return extio_search_ioseg(range, iostart, size);
+}
+
 
 #define BUILD_EXTIO(bw, type)						\
 type extio_in##bw(unsigned long addr)					\
@@ -319,7 +490,7 @@ type extio_in##bw(unsigned long addr)					\
 		struct extio_ops *ops;					\
 									\
 		ops = extio_get_ops(extio_res_head, addr);		\
-		return ops->pfin ?					\
+		return (ops && ops->pfin) ?					\
 			ops->pfin(ops->devpara,				\
 				addr - ops->offset, sizeof(type)) : -1;	\
 	} while (0);							\
@@ -334,7 +505,7 @@ void extio_out##bw(type value, unsigned long addr)			\
 		struct extio_ops *ops;					\
 									\
 		ops = extio_get_ops(extio_res_head, addr);		\
-		if (ops->pfout)						\
+		if (ops && ops->pfout)						\
 			ops->pfout(ops->devpara,			\
 				addr - ops->offset, value, sizeof(type));	\
 	}								\
@@ -349,7 +520,7 @@ void extio_ins##bw(unsigned long addr, void *buffer, unsigned int count)	\
 		struct extio_ops *ops;					\
 									\
 		ops = extio_get_ops(extio_res_head, addr);		\
-		if (ops->pfins)						\
+		if (ops && ops->pfins)						\
 			ops->pfins(ops->devpara,			\
 				addr - ops->offset, buffer,		\
 				sizeof(type), count);			\
@@ -365,7 +536,7 @@ void extio_outs##bw(unsigned long addr, const void *buffer, unsigned int count)	
 		struct extio_ops *ops;					\
 									\
 		ops = extio_get_ops(extio_res_head, addr);		\
-		if (ops->pfouts)					\
+		if (ops && ops->pfouts)					\
 			ops->pfouts(ops->devpara,			\
 				addr - ops->offset, buffer,		\
 				sizeof(type), count);			\
